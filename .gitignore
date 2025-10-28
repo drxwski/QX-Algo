@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# Data files
+*.csv
+*.log
+*.db
+nohup.out
+algo.log
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Testing
+Testing/
+test_*.py
+quick_*.py
+place_test_order.py
+
+# Sensitive (these should be in environment variables)
+.env
+credentials.txt
+
