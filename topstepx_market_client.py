@@ -342,13 +342,15 @@ class TopstepXMarketClient:
             
             print(f"[CONFIRMATION] {bias.upper()} at {conf_time} | Current Price: {current_price:.2f} | DR: {dr_high:.2f}/{dr_low:.2f}")
             
-            # SAFETY CHECK: Don't re-trade the same DR break (even if confirmation timestamp changes)
-            last_dr = self.last_dr_traded.get(session)
+            # SAFETY CHECK: Don't re-trade the same DR break - use date+session key so each day's session is independent
+            today_date = now_est.date()
+            session_date_key = f"{session}_{today_date}"
+            last_dr = self.last_dr_traded.get(session_date_key)
             if last_dr is not None:
                 last_dr_high, last_dr_low, last_bias = last_dr
                 # Consider it the "same DR" if within 0.5 points (one tick = 0.25)
                 if abs(dr_high - last_dr_high) < 0.5 and abs(dr_low - last_dr_low) < 0.5 and bias == last_bias:
-                    print(f"[Status] Already traded this DR break for {session.upper()} ({bias} @ {dr_high:.2f}/{dr_low:.2f})")
+                    print(f"[Status] Already traded this DR break for {session.upper()} today ({bias} @ {dr_high:.2f}/{dr_low:.2f})")
                     return
             
             # Risk checks
@@ -464,7 +466,7 @@ class TopstepXMarketClient:
                         self.log_trade(now_est, session, bias, entry_price, stop_loss, take_profit, contracts, order_id)
                         self.session_trades[session] += 1
                         self.last_confirmation_traded[session] = conf_time
-                        self.last_dr_traded[session] = (dr_high, dr_low, bias)  # Track DR level to prevent re-trading
+                        self.last_dr_traded[session_date_key] = (dr_high, dr_low, bias)  # Track DR (date+session specific)
                         print(f"[Risk] Session trade count for {session.upper()}: {self.session_trades[session]}/2")
                     else:
                         print(f"❌ Order failed: {order_resp}")
@@ -472,7 +474,7 @@ class TopstepXMarketClient:
                         # Still increment counter to prevent retry spam
                         self.session_trades[session] += 1
                         self.last_confirmation_traded[session] = conf_time
-                        self.last_dr_traded[session] = (dr_high, dr_low, bias)  # Track DR level to prevent re-trading
+                        self.last_dr_traded[session_date_key] = (dr_high, dr_low, bias)  # Track DR (date+session specific)
                         print(f"[Risk] Session trade count for {session.upper()}: {self.session_trades[session]}/2 (FAILED ORDER)")
                 except Exception as e:
                     print(f"❌ ERROR: {e}")
@@ -480,14 +482,14 @@ class TopstepXMarketClient:
                     # Still increment counter to prevent retry spam
                     self.session_trades[session] += 1
                     self.last_confirmation_traded[session] = conf_time
-                    self.last_dr_traded[session] = (dr_high, dr_low, bias)  # Track DR level to prevent re-trading
+                    self.last_dr_traded[session_date_key] = (dr_high, dr_low, bias)  # Track DR (date+session specific)
                     print(f"[Risk] Session trade count for {session.upper()}: {self.session_trades[session]}/2 (ERROR)")
             else:
                 print("[PAPER] Trade logged only")
                 self.log_trade(now_est, session, bias, entry_price, stop_loss, take_profit, contracts, 'PAPER')
                 self.session_trades[session] += 1
                 self.last_confirmation_traded[session] = conf_time
-                self.last_dr_traded[session] = (dr_high, dr_low, bias)  # Track DR level to prevent re-trading
+                self.last_dr_traded[session_date_key] = (dr_high, dr_low, bias)  # Track DR (date+session specific)
         else:
             print(f"[Status] No confirmation for {session.upper()} at this time")
 
