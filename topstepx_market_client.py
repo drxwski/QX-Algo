@@ -53,7 +53,6 @@ class TopstepXMarketClient:
         self.max_trades_per_session = 2  # Maximum trades per session
         self.last_confirmation_traded = {}  # session_key -> last confirmation timestamp
         self.last_dr_traded = {}  # session_key -> (dr_high, dr_low, bias) - prevent re-trading same DR break
-        self.algo_start_time = datetime.utcnow()  # Track when algo started to ignore old confirmations
 
     def reset_daily(self):
         self.daily_pnl = 0
@@ -228,11 +227,10 @@ class TopstepXMarketClient:
 
     def run_forever(self):
         eastern = pytz.timezone('US/Eastern')
-        start_time_est = self.algo_start_time.replace(tzinfo=pytz.utc).astimezone(eastern)
         print("="*70)
-        print(f"🚀 ALGO STARTED AT: {start_time_est.strftime('%Y-%m-%d %H:%M:%S')} EST")
+        print(f"🚀 TOPSTEPX ALGO STARTED")
         print("="*70)
-        print("⚠️  WILL ONLY TRADE CONFIRMATIONS AFTER THIS TIME (ignores old confirmations)")
+        print("⚠️  2 trades/session | 10-min freshness | Market orders | Skip if 1SD hit early")
         print("="*70)
         print("Starting polling loop for new bars...")
         print()
@@ -301,13 +299,7 @@ class TopstepXMarketClient:
         if conf_times:
             conf_time = conf_times[-1]
             
-            # SAFETY CHECK: Only trade confirmations that occurred AFTER algo started (prevent trading old confirmations on restart)
-            conf_time_utc = conf_time.tz_convert('UTC').replace(tzinfo=None)
-            if conf_time_utc < self.algo_start_time:
-                print(f"[Status] Confirmation at {conf_time.tz_convert('US/Eastern')} occurred before algo started - ignoring (prevents restart trades)")
-                return
-            
-            # SAFETY CHECK: Only trade confirmations from the last 10 minutes (not old ones from restart)
+            # SAFETY CHECK: Only trade fresh confirmations (within last 10 minutes)
             time_since_conf = (now_est - conf_time.tz_convert('US/Eastern')).total_seconds() / 60
             if time_since_conf > 10:
                 print(f"[Status] Confirmation is {time_since_conf:.1f} minutes old - too old to trade (10 min limit)")
@@ -342,7 +334,7 @@ class TopstepXMarketClient:
             
             print(f"[CONFIRMATION] {bias.upper()} at {conf_time} | Current Price: {current_price:.2f} | DR: {dr_high:.2f}/{dr_low:.2f}")
             
-            # SAFETY CHECK: Don't re-trade the same DR break - use date+session key so each day's session is independent
+            # SAFETY CHECK: Don't re-trade same DR break - use date+session key for independence
             today_date = now_est.date()
             session_date_key = f"{session}_{today_date}"
             last_dr = self.last_dr_traded.get(session_date_key)
@@ -391,6 +383,12 @@ class TopstepXMarketClient:
                 
                 side = 2  # BUY
                 
+                # SAFETY CHECK: If price already hit 1SD target, we missed the move - skip
+                if current_price >= take_profit:
+                    print(f"[SKIP] Bullish - price already at target {take_profit:.2f} (current: {current_price:.2f}) - MOVE MISSED")
+                    self.session_trades[session] += 1  # Count to prevent retry
+                    return
+                
                 # Check if price has retraced to entry level
                 if current_price > entry_price:
                     print(f"[WAIT] Bullish - waiting for retrace to {entry_price:.2f} (current: {current_price:.2f})")
@@ -407,6 +405,12 @@ class TopstepXMarketClient:
                 take_profit = idr_low - idr_std
                 
                 side = 1  # SELL
+                
+                # SAFETY CHECK: If price already hit 1SD target, we missed the move - skip
+                if current_price <= take_profit:
+                    print(f"[SKIP] Bearish - price already at target {take_profit:.2f} (current: {current_price:.2f}) - MOVE MISSED")
+                    self.session_trades[session] += 1  # Count to prevent retry
+                    return
                 
                 # Check if price has retraced to entry level
                 if current_price < entry_price:
@@ -466,7 +470,7 @@ class TopstepXMarketClient:
                         self.log_trade(now_est, session, bias, entry_price, stop_loss, take_profit, contracts, order_id)
                         self.session_trades[session] += 1
                         self.last_confirmation_traded[session] = conf_time
-                        self.last_dr_traded[session_date_key] = (dr_high, dr_low, bias)  # Track DR (date+session specific)
+                        self.last_dr_traded[session_date_key] = (dr_high, dr_low, bias)  # Track DR (date+session)
                         print(f"[Risk] Session trade count for {session.upper()}: {self.session_trades[session]}/2")
                     else:
                         print(f"❌ Order failed: {order_resp}")
@@ -474,7 +478,7 @@ class TopstepXMarketClient:
                         # Still increment counter to prevent retry spam
                         self.session_trades[session] += 1
                         self.last_confirmation_traded[session] = conf_time
-                        self.last_dr_traded[session_date_key] = (dr_high, dr_low, bias)  # Track DR (date+session specific)
+                        self.last_dr_traded[session_date_key] = (dr_high, dr_low, bias)  # Track DR (date+session)
                         print(f"[Risk] Session trade count for {session.upper()}: {self.session_trades[session]}/2 (FAILED ORDER)")
                 except Exception as e:
                     print(f"❌ ERROR: {e}")
@@ -482,14 +486,14 @@ class TopstepXMarketClient:
                     # Still increment counter to prevent retry spam
                     self.session_trades[session] += 1
                     self.last_confirmation_traded[session] = conf_time
-                    self.last_dr_traded[session_date_key] = (dr_high, dr_low, bias)  # Track DR (date+session specific)
+                    self.last_dr_traded[session_date_key] = (dr_high, dr_low, bias)  # Track DR (date+session)
                     print(f"[Risk] Session trade count for {session.upper()}: {self.session_trades[session]}/2 (ERROR)")
             else:
                 print("[PAPER] Trade logged only")
                 self.log_trade(now_est, session, bias, entry_price, stop_loss, take_profit, contracts, 'PAPER')
                 self.session_trades[session] += 1
                 self.last_confirmation_traded[session] = conf_time
-                self.last_dr_traded[session_date_key] = (dr_high, dr_low, bias)  # Track DR (date+session specific)
+                self.last_dr_traded[session_date_key] = (dr_high, dr_low, bias)  # Track DR (date+session)
         else:
             print(f"[Status] No confirmation for {session.upper()} at this time")
 
