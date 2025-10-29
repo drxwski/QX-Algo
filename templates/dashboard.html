@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TopstepX Trading Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header>
+            <div class="header-content">
+                <h1>🎯 TopstepX Trading Dashboard</h1>
+                <div class="status-badge" id="algo-status">
+                    <span class="status-dot offline"></span>
+                    <span>Checking...</span>
+                </div>
+            </div>
+            <div class="header-info">
+                <span id="current-time">--:--:-- EST</span>
+                <span class="separator">|</span>
+                <span id="current-session">No Session</span>
+            </div>
+        </header>
+
+        <!-- Control Panel -->
+        <div class="control-panel">
+            <button id="start-btn" class="btn btn-success" onclick="controlAlgo('start')">
+                ▶️ Start Algo
+            </button>
+            <button id="stop-btn" class="btn btn-danger" onclick="controlAlgo('stop')">
+                ⏸️ Stop Algo
+            </button>
+            <button class="btn btn-secondary" onclick="refreshDashboard()">
+                🔄 Refresh
+            </button>
+        </div>
+
+        <!-- Metrics Grid -->
+        <div class="metrics-grid">
+            <div class="metric-card">
+                <div class="metric-label">Total Trades Today</div>
+                <div class="metric-value" id="total-trades">0</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Daily P&L</div>
+                <div class="metric-value" id="daily-pnl">$0.00</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Win Rate</div>
+                <div class="metric-value" id="win-rate">0%</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Open Positions</div>
+                <div class="metric-value" id="open-positions">0</div>
+            </div>
+        </div>
+
+        <!-- Session Trade Counts -->
+        <div class="session-counts">
+            <div class="session-card">
+                <div class="session-header">RDR Session</div>
+                <div class="session-time">10:30 AM - 4:00 PM</div>
+                <div class="session-trades" id="rdr-trades">0/2 trades</div>
+            </div>
+            <div class="session-card">
+                <div class="session-header">ODR Session</div>
+                <div class="session-time">4:00 AM - 8:00 AM</div>
+                <div class="session-trades" id="odr-trades">0/2 trades</div>
+            </div>
+            <div class="session-card">
+                <div class="session-header">ADR Session</div>
+                <div class="session-time">8:30 PM - 1:00 AM</div>
+                <div class="session-trades" id="adr-trades">0/2 trades</div>
+            </div>
+        </div>
+
+        <!-- Performance Section -->
+        <div class="section">
+            <h2>📊 Last Trade</h2>
+            <div class="last-trade" id="last-trade">
+                <p>No trades yet today</p>
+            </div>
+        </div>
+
+        <!-- Live Output Section -->
+        <div class="section">
+            <h2>📡 Live Algo Output</h2>
+            <div class="log-container" id="log-container">
+                <div class="log-content" id="log-content">
+                    <div class="log-line">Waiting for logs...</div>
+                </div>
+            </div>
+            <div class="log-controls">
+                <label>
+                    <input type="checkbox" id="auto-scroll" checked> Auto-scroll
+                </label>
+                <span class="separator">|</span>
+                <button class="btn-small" onclick="clearLogs()">Clear Display</button>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <footer>
+            <p>Last updated: <span id="last-update">Never</span></p>
+            <p>Algo uptime: <span id="algo-uptime">N/A</span></p>
+        </footer>
+    </div>
+
+    <script>
+        // Auto-update interval
+        const UPDATE_INTERVAL = 5000; // 5 seconds
+        const LOG_UPDATE_INTERVAL = 2000; // 2 seconds
+        let lastLogLength = 0;
+
+        // Update dashboard data
+        async function updateDashboard() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+                
+                // Update time
+                document.getElementById('current-time').textContent = data.timestamp;
+                
+                // Update session
+                document.getElementById('current-session').textContent = 
+                    `${data.current_session} Session (${data.session_time})`;
+                
+                // Update algo status
+                const statusBadge = document.getElementById('algo-status');
+                const statusDot = statusBadge.querySelector('.status-dot');
+                
+                if (data.algo_running) {
+                    statusDot.className = 'status-dot online';
+                    statusBadge.querySelector('span:last-child').textContent = 'Running';
+                    document.getElementById('start-btn').disabled = true;
+                    document.getElementById('stop-btn').disabled = false;
+                } else {
+                    statusDot.className = 'status-dot offline';
+                    statusBadge.querySelector('span:last-child').textContent = 'Stopped';
+                    document.getElementById('start-btn').disabled = false;
+                    document.getElementById('stop-btn').disabled = true;
+                }
+                
+                // Update metrics
+                document.getElementById('total-trades').textContent = data.stats.total_trades;
+                document.getElementById('daily-pnl').textContent = 
+                    `$${data.stats.daily_pnl.toFixed(2)}`;
+                document.getElementById('win-rate').textContent = 
+                    `${data.stats.win_rate}%`;
+                document.getElementById('open-positions').textContent = data.stats.open_positions;
+                
+                // Update session counts
+                document.getElementById('rdr-trades').textContent = 
+                    `${data.stats.session_counts.rdr}/2 trades`;
+                document.getElementById('odr-trades').textContent = 
+                    `${data.stats.session_counts.odr}/2 trades`;
+                document.getElementById('adr-trades').textContent = 
+                    `${data.stats.session_counts.adr}/2 trades`;
+                
+                // Update last trade
+                const lastTradeDiv = document.getElementById('last-trade');
+                if (data.stats.last_trade) {
+                    const trade = data.stats.last_trade;
+                    lastTradeDiv.innerHTML = `
+                        <p><strong>${trade.session}</strong> ${trade.bias.toUpperCase()} entry at <strong>${trade.entry}</strong></p>
+                        <p class="trade-detail">Time: ${trade.time} | Order ID: ${trade.order_id}</p>
+                    `;
+                } else {
+                    lastTradeDiv.innerHTML = '<p>No trades yet today</p>';
+                }
+                
+                // Update uptime
+                document.getElementById('algo-uptime').textContent = data.algo_uptime;
+                
+                // Update timestamp
+                document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+                
+            } catch (error) {
+                console.error('Error updating dashboard:', error);
+            }
+        }
+
+        // Update logs
+        async function updateLogs() {
+            try {
+                const response = await fetch('/api/logs?lines=100');
+                const data = await response.json();
+                const logs = data.logs;
+                
+                if (logs.length > lastLogLength) {
+                    const logContent = document.getElementById('log-content');
+                    const autoScroll = document.getElementById('auto-scroll').checked;
+                    
+                    // Clear and rebuild
+                    logContent.innerHTML = '';
+                    logs.forEach(line => {
+                        const div = document.createElement('div');
+                        div.className = 'log-line';
+                        
+                        // Color coding
+                        if (line.includes('[TRADE]') || line.includes('✓')) {
+                            div.classList.add('log-success');
+                        } else if (line.includes('[ERROR]') || line.includes('❌')) {
+                            div.classList.add('log-error');
+                        } else if (line.includes('[CONFIRMATION]') || line.includes('[SIGNAL]')) {
+                            div.classList.add('log-warning');
+                        } else if (line.includes('[WAIT]')) {
+                            div.classList.add('log-info');
+                        }
+                        
+                        div.textContent = line;
+                        logContent.appendChild(div);
+                    });
+                    
+                    // Auto-scroll to bottom
+                    if (autoScroll) {
+                        const container = document.getElementById('log-container');
+                        container.scrollTop = container.scrollHeight;
+                    }
+                    
+                    lastLogLength = logs.length;
+                }
+            } catch (error) {
+                console.error('Error updating logs:', error);
+            }
+        }
+
+        // Control algo
+        async function controlAlgo(action) {
+            try {
+                const response = await fetch(`/api/control/${action}`);
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert(data.message);
+                    updateDashboard();
+                } else {
+                    alert(`Error: ${data.message}`);
+                }
+            } catch (error) {
+                alert(`Error: ${error.message}`);
+            }
+        }
+
+        // Refresh everything
+        function refreshDashboard() {
+            updateDashboard();
+            updateLogs();
+        }
+
+        // Clear log display
+        function clearLogs() {
+            document.getElementById('log-content').innerHTML = 
+                '<div class="log-line">Logs cleared (will refresh in 2 seconds)</div>';
+            lastLogLength = 0;
+        }
+
+        // Initialize
+        updateDashboard();
+        updateLogs();
+        
+        // Set intervals
+        setInterval(updateDashboard, UPDATE_INTERVAL);
+        setInterval(updateLogs, LOG_UPDATE_INTERVAL);
+    </script>
+</body>
+</html>
+
