@@ -436,38 +436,38 @@ class TopstepXMarketClient:
             if ENABLE_LIVE_TRADING:
                 try:
                     print(f"[TRADE] Placing MARKET order (price hit {entry_price:.2f})...")
-                order_resp = place_order(
-                    account_id=self.account_id,
-                    contract_id=self.contract_id,
-                    size=contracts,
-                    side=side,
+                    order_resp = place_order(
+                        account_id=self.account_id,
+                        contract_id=self.contract_id,
+                        size=contracts,
+                        side=side,
                         order_type=2,
-                    token=self.jwt_token
-                )
+                        token=self.jwt_token
+                    )
                     
                     if order_resp and 'orderId' in order_resp:
-                order_id = order_resp.get('orderId')
+                        order_id = order_resp.get('orderId')
                         print(f"✓ Market order placed: ID {order_id}")
-                self.open_trades.append({
-                    'session': session,
-                    'entry': entry_price,
-                    'stop': stop_loss,
-                    'tp': take_profit,
-                    'side': side,
+                        self.open_trades.append({
+                            'session': session,
+                            'entry': entry_price,
+                            'stop': stop_loss,
+                            'tp': take_profit,
+                            'side': side,
                             'bias': bias,
-                    'contracts': contracts,
+                            'contracts': contracts,
                             'contracts_remaining': contracts,
-                    'open_time': datetime.utcnow(),
-                    'partial_taken': False,
+                            'open_time': datetime.utcnow(),
+                            'partial_taken': False,
                             'trailing_stop_active': False,
                             'trailing_stop_price': None,
                             'highest_price': entry_price if bias == 'bullish' else None,
                             'lowest_price': entry_price if bias == 'bearish' else None,
-                    'order_id': order_id,
-                })
-            self.log_trade(now_est, session, bias, entry_price, stop_loss, take_profit, contracts, order_id)
-            self.session_trades[session] += 1
-            self.last_confirmation_traded[session] = conf_time
+                            'order_id': order_id,
+                        })
+                        self.log_trade(now_est, session, bias, entry_price, stop_loss, take_profit, contracts, order_id)
+                        self.session_trades[session] += 1
+                        self.last_confirmation_traded[session] = conf_time
                         self.last_dr_traded[session_date_key] = (dr_high, dr_low, bias)  # Track DR (date+session specific)
                         print(f"[Risk] Session trade count for {session.upper()}: {self.session_trades[session]}/2")
                     else:
