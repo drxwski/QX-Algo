@@ -40,11 +40,11 @@ if [ -f "dashboard_server.py" ]; then
     fi
     
     echo "Starting gunicorn..."
-    gunicorn dashboard_server:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120 --access-logfile - --error-logfile - --log-level debug
+    exec gunicorn dashboard_server:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120 --access-logfile - --error-logfile - --log-level debug
 else
     echo "✗ dashboard_server.py NOT found!"
     echo "Available Python files:"
-    ls -la *.py
+    ls -la *.py || true
     exit 1
 fi
 
