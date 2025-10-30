@@ -53,6 +53,7 @@ class TopstepXMarketClient:
         self.max_trades_per_session = 2  # Maximum trades per session
         self.last_confirmation_traded = {}  # session_key -> last confirmation timestamp
         self.last_dr_traded = {}  # session_key -> (dr_high, dr_low, bias) - prevent re-trading same DR break
+        self.last_processed_bar = {}  # session_key -> last bar timestamp (bar-close trigger)
 
     def reset_daily(self):
         self.daily_pnl = 0
@@ -65,6 +66,7 @@ class TopstepXMarketClient:
         self.open_trades = []
         self.last_confirmation_traded = {}
         self.last_dr_traded = {}
+        self.last_processed_bar = {}
         print("[Risk] Daily/session counters reset.")
 
     def update_risk_state(self, trade_pnl):
@@ -259,6 +261,18 @@ class TopstepXMarketClient:
             pytime.sleep(POLL_INTERVAL)
 
     def run_signals_on_bars(self, bars_df, current_session, now_est):
+        # BAR-CLOSE TRIGGER: Only evaluate on new bar close (prevents mid-bar evaluation)
+        latest_bar_time = bars_df.index[-1]
+        last_processed = self.last_processed_bar.get(current_session)
+        
+        if last_processed is not None and latest_bar_time == last_processed:
+            # Already processed this bar, skip evaluation
+            return
+        
+        # Mark as processed BEFORE evaluation (idempotency)
+        self.last_processed_bar[current_session] = latest_bar_time
+        print(f"[Bar-Close] Processing new bar at {latest_bar_time.strftime('%H:%M:%S')}")
+        
         # Ensure DR/IDR levels are computed for the current date
         boundaries = self.model.compute_boundaries(bars_df)
         # Only act if DR window is complete
