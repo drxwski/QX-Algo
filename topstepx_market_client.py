@@ -185,11 +185,17 @@ class TopstepXMarketClient:
         now = datetime.now(pytz.utc)
         end_time = now.replace(second=0, microsecond=0)
         start_time = end_time - timedelta(minutes=BAR_UNIT_NUMBER * BAR_LIMIT)
+        
+        # Format datetimes for TopstepX API (expects UTC ISO format with Z suffix)
+        # Remove timezone info before isoformat to avoid +00:00 in output
+        start_time_str = start_time.replace(tzinfo=None).isoformat() + "Z"
+        end_time_str = end_time.replace(tzinfo=None).isoformat() + "Z"
+        
         payload = {
             "contractId": self.contract_id,
             "live": False,
-            "startTime": start_time.isoformat() + "Z",
-            "endTime": end_time.isoformat() + "Z",
+            "startTime": start_time_str,
+            "endTime": end_time_str,
             "unit": BAR_UNIT,
             "unitNumber": BAR_UNIT_NUMBER,
             "limit": BAR_LIMIT,
