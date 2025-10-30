@@ -54,6 +54,7 @@ class TopstepXMarketClient:
         self.last_confirmation_traded = {}  # session_key -> last confirmation timestamp
         self.last_dr_traded = {}  # session_key -> (dr_high, dr_low, bias) - prevent re-trading same DR break
         self.last_processed_bar = {}  # session_key -> last bar timestamp (bar-close trigger)
+        self.session_cache = {}  # (session, date) -> {dr_high, dr_low, idr_high, idr_low, dr_end, idr_std}
 
     def reset_daily(self):
         self.daily_pnl = 0
@@ -67,6 +68,7 @@ class TopstepXMarketClient:
         self.last_confirmation_traded = {}
         self.last_dr_traded = {}
         self.last_processed_bar = {}
+        self.session_cache = {}
         print("[Risk] Daily/session counters reset.")
 
     def update_risk_state(self, trade_pnl):
@@ -103,6 +105,63 @@ class TopstepXMarketClient:
         dollar_risk = ticks * tick_value
         print(f"[Risk] Position size: {contracts} contracts (MINIMUM SIZE TEST MODE) | Stop distance: {stop_distance:.2f} pts | Risk: ${dollar_risk:.2f}")
         return contracts
+
+    def get_or_compute_session_boundaries(self, bars_df, session, current_date):
+        """
+        Get cached session boundaries or compute if not cached.
+        
+        Caches: {dr_high, dr_low, idr_high, idr_low, dr_end, idr_std}
+        Key: (session, date_str)
+        
+        Returns: dict or None if no valid boundaries
+        """
+        cache_key = (session, current_date.isoformat())
+        
+        # Check cache first
+        if cache_key in self.session_cache:
+            print(f"[Cache] Using cached boundaries for {session.upper()} on {current_date}")
+            return self.session_cache[cache_key]
+        
+        # Not cached - compute fresh
+        print(f"[Cache] Computing fresh boundaries for {session.upper()} on {current_date}")
+        boundaries = self.model.compute_boundaries(bars_df)
+        session_bounds = boundaries[session]
+        
+        # Get the most recent non-NaN boundaries for current session
+        valid_bounds = session_bounds.dropna(subset=['dr_high', 'dr_low', 'idr_high', 'idr_low'])
+        if valid_bounds.empty:
+            print(f"[Cache] No valid boundaries found for {session.upper()}")
+            return None
+        
+        # Extract values
+        dr_high = valid_bounds['dr_high'].iloc[-1]
+        dr_low = valid_bounds['dr_low'].iloc[-1]
+        idr_high = valid_bounds['idr_high'].iloc[-1]
+        idr_low = valid_bounds['idr_low'].iloc[-1]
+        dr_end = valid_bounds['dr_end'].iloc[-1]
+        
+        # Calculate IDR std dev for this session (used for take profit)
+        dr_bars = self.get_session_window_bars(bars_df, session, 
+                                                 datetime.now(pytz.utc).replace(tzinfo=pytz.utc).astimezone(pytz.timezone('US/Eastern')))
+        if not dr_bars.empty:
+            idr_std = dr_bars['close'].std()
+        else:
+            idr_range = idr_high - idr_low
+            idr_std = idr_range * 0.3  # Fallback
+        
+        # Cache it
+        cached = {
+            'dr_high': dr_high,
+            'dr_low': dr_low,
+            'idr_high': idr_high,
+            'idr_low': idr_low,
+            'dr_end': dr_end,
+            'idr_std': idr_std
+        }
+        self.session_cache[cache_key] = cached
+        print(f"[Cache] Cached boundaries: DR {dr_high:.2f}/{dr_low:.2f} | IDR {idr_high:.2f}/{idr_low:.2f} | Std {idr_std:.2f}")
+        
+        return cached
 
     def _init_account_contract(self):
         token = self.jwt_token
@@ -273,27 +332,27 @@ class TopstepXMarketClient:
         self.last_processed_bar[current_session] = latest_bar_time
         print(f"[Bar-Close] Processing new bar at {latest_bar_time.strftime('%H:%M:%S')}")
         
-        # Ensure DR/IDR levels are computed for the current date
-        boundaries = self.model.compute_boundaries(bars_df)
+        # Get or compute cached session boundaries
+        current_date = now_est.date()
+        cached_bounds = self.get_or_compute_session_boundaries(bars_df, current_session, current_date)
+        
+        if cached_bounds is None:
+            print(f"[DR/IDR] No boundaries found for {current_session.upper()} session.")
+            return
+        
+        # Extract cached values
+        dr_high = cached_bounds['dr_high']
+        dr_low = cached_bounds['dr_low']
+        idr_high = cached_bounds['idr_high']
+        idr_low = cached_bounds['idr_low']
+        dr_end = cached_bounds['dr_end']
+        idr_std = cached_bounds['idr_std']
+        
+        print(f"[DR/IDR] {current_session.upper()} | DR: {dr_high:.2f}/{dr_low:.2f} | IDR: {idr_high:.2f}/{idr_low:.2f}")
+        
         # Only act if DR window is complete
         dr_window_end = self.get_dr_window_end(current_session)
         dr_window_end_dt = now_est.replace(hour=dr_window_end.hour, minute=dr_window_end.minute, second=0, microsecond=0)
-
-        # Get DR/IDR levels for current session from model_logic.py (single source of truth)
-        session_bounds = boundaries[current_session]
-        
-        # Get the most recent non-NaN boundaries for current session
-        valid_bounds = session_bounds.dropna(subset=['dr_high', 'dr_low', 'idr_high', 'idr_low'])
-        if valid_bounds.empty:
-            print(f"[DR/IDR] No boundaries found for {current_session.upper()} session.")
-            return
-            
-        # Use boundaries from model_logic.py
-        dr_high = valid_bounds['dr_high'].iloc[-1]
-        dr_low = valid_bounds['dr_low'].iloc[-1]
-        idr_high = valid_bounds['idr_high'].iloc[-1]
-        idr_low = valid_bounds['idr_low'].iloc[-1]
-        print(f"[DR/IDR] {current_session.upper()} | DR: {dr_high:.2f}/{dr_low:.2f} | IDR: {idr_high:.2f}/{idr_low:.2f}")
             
         if now_est.time() < dr_window_end:
             print(f"[Wait] DR window for {current_session.upper()} not complete (ends at {dr_window_end})")
@@ -382,12 +441,8 @@ class TopstepXMarketClient:
             idr_range = idr_high - idr_low
             idr_midpoint = idr_low + (0.50 * idr_range)  # 50% of IDR
             
-            # Calculate 1 standard deviation of IDR (using close prices during formation)
-            dr_bars = self.get_session_window_bars(bars_df, session, now_est)
-            if not dr_bars.empty:
-                idr_std = dr_bars['close'].std()
-            else:
-                idr_std = idr_range * 0.3  # Fallback: 30% of range
+            # Use cached IDR std dev (already computed in get_or_compute_session_boundaries)
+            # idr_std is available from cached_bounds
             
             if bias == 'bullish':
                 # Entry: 20% retrace from IDR high
