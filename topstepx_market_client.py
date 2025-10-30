@@ -46,7 +46,7 @@ class TopstepXMarketClient:
         self.consecutive_losses = 0
         self.current_risk_percent = 0.015  # Start at 1.5%
         self.last_trade_win = None
-        self.today = datetime.utcnow().date()
+        self.today = datetime.now(pytz.utc).date()
         self.open_trades = []  # Track open trades for trailing stop, session end, etc.
         self.account_balance = 50000  # Your actual account balance
         self.max_daily_loss = 900  # Maximum daily loss limit
@@ -121,7 +121,7 @@ class TopstepXMarketClient:
         print(f'[TopstepXMarketClient] Using account_id={self.account_id}, contract_id={self.contract_id}')
 
     def fetch_latest_bars(self):
-        now = datetime.utcnow()
+        now = datetime.now(pytz.utc)
         end_time = now.replace(second=0, microsecond=0)
         start_time = end_time - timedelta(minutes=BAR_UNIT_NUMBER * BAR_LIMIT)
         payload = {
@@ -161,7 +161,7 @@ class TopstepXMarketClient:
         # Trading windows from model_logic.py (lines 106-109)
         eastern = pytz.timezone('US/Eastern')
         if now is None:
-            now = datetime.utcnow().replace(tzinfo=pytz.utc).astimezone(eastern)
+            now = datetime.now(pytz.utc).astimezone(eastern)
         else:
             now = now.replace(tzinfo=pytz.utc).astimezone(eastern)
         t = now.time()
@@ -236,7 +236,7 @@ class TopstepXMarketClient:
         print()
         while True:
             try:
-                now_utc = datetime.utcnow()
+                now_utc = datetime.now(pytz.utc)
                 now_est = now_utc.replace(tzinfo=pytz.utc).astimezone(eastern)
                 if now_est.date() != self.today:
                     self.today = now_est.date()
@@ -457,7 +457,7 @@ class TopstepXMarketClient:
                             'bias': bias,
                             'contracts': contracts,
                             'contracts_remaining': contracts,
-                            'open_time': datetime.utcnow(),
+                            'open_time': datetime.now(pytz.utc),
                             'partial_taken': False,
                             'trailing_stop_active': False,
                             'trailing_stop_price': None,
