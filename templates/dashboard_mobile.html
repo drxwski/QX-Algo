@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QX Algo Monitor</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 16px;
+            color: #333;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: white;
+            border-radius: 16px;
+            padding: 20px;
+            margin-bottom: 16px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .header h1 {
+            font-size: 24px;
+            color: #667eea;
+            margin-bottom: 8px;
+        }
+
+        .timestamp {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+            animation: pulse 2s infinite;
+        }
+
+        .status-running {
+            background: #10b981;
+        }
+
+        .status-stopped {
+            background: #ef4444;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .card {
+            background: white;
+            border-radius: 16px;
+            padding: 20px;
+            margin-bottom: 16px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .card-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #374151;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+        }
+
+        .card-title-icon {
+            font-size: 20px;
+            margin-right: 8px;
+        }
+
+        .metric-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+        }
+
+        .metric {
+            text-align: center;
+            padding: 12px;
+            background: #f3f4f6;
+            border-radius: 8px;
+        }
+
+        .metric-label {
+            font-size: 12px;
+            color: #6b7280;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .metric-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #111827;
+        }
+
+        .metric-value.positive {
+            color: #10b981;
+        }
+
+        .metric-value.negative {
+            color: #ef4444;
+        }
+
+        .session-badge {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .session-odr {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        .session-rdr {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .session-adr {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .session-none {
+            background: #f3f4f6;
+            color: #6b7280;
+        }
+
+        .dr-idr-display {
+            background: #f9fafb;
+            border-radius: 8px;
+            padding: 12px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            color: #374151;
+            margin-top: 8px;
+        }
+
+        .trade-list {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .trade-item {
+            border-bottom: 1px solid #e5e7eb;
+            padding: 12px 0;
+        }
+
+        .trade-item:last-child {
+            border-bottom: none;
+        }
+
+        .trade-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 4px;
+        }
+
+        .trade-time {
+            font-size: 12px;
+            color: #6b7280;
+        }
+
+        .trade-bias {
+            font-size: 12px;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 4px;
+        }
+
+        .bias-bullish {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .bias-bearish {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .trade-details {
+            font-size: 13px;
+            color: #4b5563;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: white;
+        }
+
+        .refresh-indicator {
+            text-align: center;
+            color: #9ca3af;
+            font-size: 12px;
+            margin-top: 16px;
+        }
+
+        .no-data {
+            text-align: center;
+            padding: 20px;
+            color: #9ca3af;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 QX Algo Monitor</h1>
+            <p class="timestamp" id="timestamp">Loading...</p>
+        </div>
+
+        <div class="card">
+            <div class="card-title">
+                <span class="card-title-icon">🤖</span>
+                Algo Status
+            </div>
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+                <div>
+                    <span class="status-indicator" id="status-dot"></span>
+                    <span id="algo-status">Checking...</span>
+                </div>
+                <div>
+                    <span class="session-badge" id="session-badge">LOADING</span>
+                </div>
+            </div>
+            <div class="dr-idr-display" id="dr-idr" style="display: none; margin-top: 12px;"></div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">
+                <span class="card-title-icon">💰</span>
+                Today's Performance
+            </div>
+            <div class="metric-grid">
+                <div class="metric">
+                    <div class="metric-label">P&L</div>
+                    <div class="metric-value" id="pnl-total">$0.00</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Trades</div>
+                    <div class="metric-value" id="trade-count">0</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Wins</div>
+                    <div class="metric-value positive" id="win-count">0</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Losses</div>
+                    <div class="metric-value negative" id="loss-count">0</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">
+                <span class="card-title-icon">📈</span>
+                Recent Trades
+            </div>
+            <div class="trade-list" id="trade-list">
+                <div class="no-data">No trades yet today</div>
+            </div>
+        </div>
+
+        <div class="refresh-indicator" id="refresh-indicator">
+            Auto-refreshing every 10 seconds...
+        </div>
+    </div>
+
+    <script>
+        let updateInterval;
+
+        async function updateDashboard() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+
+                // Update timestamp
+                document.getElementById('timestamp').textContent = data.timestamp;
+
+                // Update algo status
+                const statusDot = document.getElementById('status-dot');
+                const statusText = document.getElementById('algo-status');
+                
+                if (data.algo_running) {
+                    statusDot.className = 'status-indicator status-running';
+                    statusText.textContent = 'Running';
+                } else {
+                    statusDot.className = 'status-indicator status-stopped';
+                    statusText.textContent = 'Stopped';
+                }
+
+                // Update session badge
+                const sessionBadge = document.getElementById('session-badge');
+                sessionBadge.textContent = data.current_session + ' ' + (data.session_window || '');
+                sessionBadge.className = 'session-badge session-' + data.current_session.toLowerCase();
+
+                // Update DR/IDR display
+                const drIdrEl = document.getElementById('dr-idr');
+                if (data.dr_idr) {
+                    drIdrEl.style.display = 'block';
+                    drIdrEl.textContent = data.dr_idr;
+                } else {
+                    drIdrEl.style.display = 'none';
+                }
+
+                // Update P&L metrics
+                const pnl = data.pnl;
+                const pnlEl = document.getElementById('pnl-total');
+                pnlEl.textContent = '$' + pnl.total.toFixed(2);
+                pnlEl.className = 'metric-value ' + (pnl.total >= 0 ? 'positive' : 'negative');
+
+                document.getElementById('trade-count').textContent = pnl.trades_count;
+                document.getElementById('win-count').textContent = pnl.wins;
+                document.getElementById('loss-count').textContent = pnl.losses;
+
+                // Update trade list
+                const tradeList = document.getElementById('trade-list');
+                if (data.recent_trades && data.recent_trades.length > 0) {
+                    tradeList.innerHTML = data.recent_trades.map(trade => `
+                        <div class="trade-item">
+                            <div class="trade-header">
+                                <span class="trade-time">${trade.timestamp_est}</span>
+                                <span class="trade-bias bias-${trade.bias}">${trade.bias.toUpperCase()}</span>
+                            </div>
+                            <div class="trade-details">
+                                ${trade.session.toUpperCase()} | Entry: ${parseFloat(trade.entry).toFixed(2)} | 
+                                Stop: ${parseFloat(trade.stop).toFixed(2)} | Size: ${trade.size}
+                            </div>
+                        </div>
+                    `).join('');
+                } else {
+                    tradeList.innerHTML = '<div class="no-data">No trades yet today</div>';
+                }
+
+                // Update refresh indicator
+                document.getElementById('refresh-indicator').textContent = 
+                    'Last updated: ' + new Date().toLocaleTimeString() + ' • Auto-refresh in 10s';
+
+            } catch (error) {
+                console.error('Error updating dashboard:', error);
+                document.getElementById('refresh-indicator').textContent = 
+                    'Update failed • Retrying in 10s';
+            }
+        }
+
+        // Initial update
+        updateDashboard();
+
+        // Auto-refresh every 10 seconds
+        updateInterval = setInterval(updateDashboard, 10000);
+
+        // Refresh on visibility change (when returning to tab)
+        document.addEventListener('visibilitychange', function() {
+            if (!document.hidden) {
+                updateDashboard();
+            }
+        });
+    </script>
+</body>
+</html>
+
