@@ -34,7 +34,8 @@ class TopstepXMarketClient:
         # FIXED ENTRY MODEL - No metrics CSV needed
         # self.metrics = pd.read_csv(METRICS_PATH)  # DISABLED for fixed model
         self.account_id = None
-        self.contract_id = None
+        self.contract_id = None            # Trading contract (MES)
+        self.contract_id_es = None         # Fallback bars contract (ES)
         self._init_account_contract()
         # QXSignalGenerator setup
         time_bins = pd.date_range('00:00', '23:59', freq='1min').strftime('%H:%M')
@@ -203,13 +204,15 @@ class TopstepXMarketClient:
         for c in contracts:
             desc = c.get('description', '')
             name = c.get('name')
-            # Prefer exact symbol, then explicit Micro description
             if name == CONTRACT_NAME or 'Micro E-mini S&P 500' in desc:
                 self.contract_id = c['id']
-                break
+            if name and name.startswith('ES') or 'E-Mini S&P 500' in desc and 'Micro' not in desc:
+                # Standard ES contract for bars fallback
+                self.contract_id_es = c['id']
+        
         if not self.contract_id:
             raise Exception(f'Contract {CONTRACT_NAME} not found!')
-        print(f'[TopstepXMarketClient] Using account_id={self.account_id}, contract_id={self.contract_id}')
+        print(f'[TopstepXMarketClient] Using account_id={self.account_id}, trade_contract_id={self.contract_id} (MES), bars_fallback_id={self.contract_id_es}')
 
     def fetch_latest_bars(self):
         now = datetime.now(pytz.utc)
@@ -237,6 +240,12 @@ class TopstepXMarketClient:
         if not bars:
             print(f"[Bars] Empty response. Retrying with live=True | contractId={self.contract_id} | window={start_time_str}→{end_time_str}")
             payload["live"] = True
+            resp = topstepx_request("POST", "/api/History/retrieveBars", token=self.jwt_token, json=payload)
+            bars = resp.get("bars", [])
+        # Final fallback: pull ES bars if MES history not available
+        if not bars and self.contract_id_es:
+            print(f"[Bars] Fallback to ES bars for signals | contractId={self.contract_id_es}")
+            payload["contractId"] = self.contract_id_es
             resp = topstepx_request("POST", "/api/History/retrieveBars", token=self.jwt_token, json=payload)
             bars = resp.get("bars", [])
         if not bars:
