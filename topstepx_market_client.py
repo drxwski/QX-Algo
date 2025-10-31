@@ -224,8 +224,13 @@ class TopstepXMarketClient:
         start_time_str = start_time.replace(tzinfo=None).isoformat() + "Z"
         end_time_str = end_time.replace(tzinfo=None).isoformat() + "Z"
         
+        # ALWAYS use ES bars for signal generation if available; trade on MES
+        bars_contract = self.contract_id_es or self.contract_id
+        if bars_contract != self.contract_id:
+            print(f"[Bars] Using ES for analysis (contractId={bars_contract}); orders on MES (contractId={self.contract_id})")
+
         payload = {
-            "contractId": self.contract_id,
+            "contractId": bars_contract,
             "live": False,
             "startTime": start_time_str,
             "endTime": end_time_str,
@@ -238,21 +243,15 @@ class TopstepXMarketClient:
         bars = resp.get("bars", [])
         # Retry once with live=True (some contracts/sessions require live flag)
         if not bars:
-            print(f"[Bars] Empty response. Retrying with live=True | contractId={self.contract_id} | window={start_time_str}→{end_time_str}")
+            print(f"[Bars] Empty response. Retrying with live=True | contractId={bars_contract} | window={start_time_str}→{end_time_str}")
             payload["live"] = True
-            resp = topstepx_request("POST", "/api/History/retrieveBars", token=self.jwt_token, json=payload)
-            bars = resp.get("bars", [])
-        # Final fallback: pull ES bars if MES history not available
-        if not bars and self.contract_id_es:
-            print(f"[Bars] Fallback to ES bars for signals | contractId={self.contract_id_es}")
-            payload["contractId"] = self.contract_id_es
             resp = topstepx_request("POST", "/api/History/retrieveBars", token=self.jwt_token, json=payload)
             bars = resp.get("bars", [])
         if not bars:
             # Last resort: fetch by limit only (no time window) and allow partial bar
             print("[Bars] Final attempt: limit-only query (includePartialBar=True)")
             minimal_payload = {
-                "contractId": self.contract_id,
+                "contractId": bars_contract,
                 "live": True,
                 "unit": BAR_UNIT,
                 "unitNumber": BAR_UNIT_NUMBER,
@@ -261,9 +260,10 @@ class TopstepXMarketClient:
             }
             resp = topstepx_request("POST", "/api/History/retrieveBars", token=self.jwt_token, json=minimal_payload)
             bars = resp.get("bars", [])
-            if not bars and self.contract_id_es:
-                print("[Bars] Final attempt fallback to ES (limit-only)")
-                minimal_payload["contractId"] = self.contract_id_es
+            if not bars and bars_contract != self.contract_id:
+                # If ES also fails, last-ditch try with MES
+                print("[Bars] Final attempt fallback to MES (limit-only)")
+                minimal_payload["contractId"] = self.contract_id
                 resp = topstepx_request("POST", "/api/History/retrieveBars", token=self.jwt_token, json=minimal_payload)
                 bars = resp.get("bars", [])
         if not bars:
