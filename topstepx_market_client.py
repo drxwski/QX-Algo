@@ -249,6 +249,24 @@ class TopstepXMarketClient:
             resp = topstepx_request("POST", "/api/History/retrieveBars", token=self.jwt_token, json=payload)
             bars = resp.get("bars", [])
         if not bars:
+            # Last resort: fetch by limit only (no time window) and allow partial bar
+            print("[Bars] Final attempt: limit-only query (includePartialBar=True)")
+            minimal_payload = {
+                "contractId": self.contract_id,
+                "live": True,
+                "unit": BAR_UNIT,
+                "unitNumber": BAR_UNIT_NUMBER,
+                "limit": BAR_LIMIT,
+                "includePartialBar": True
+            }
+            resp = topstepx_request("POST", "/api/History/retrieveBars", token=self.jwt_token, json=minimal_payload)
+            bars = resp.get("bars", [])
+            if not bars and self.contract_id_es:
+                print("[Bars] Final attempt fallback to ES (limit-only)")
+                minimal_payload["contractId"] = self.contract_id_es
+                resp = topstepx_request("POST", "/api/History/retrieveBars", token=self.jwt_token, json=minimal_payload)
+                bars = resp.get("bars", [])
+        if not bars:
             print("No bars returned.")
             return pd.DataFrame()
         df = pd.DataFrame(bars)
