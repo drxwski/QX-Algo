@@ -106,16 +106,22 @@ class TopstepXMarketClient:
         print(f"[Risk] Position size: {contracts} contracts (MINIMUM SIZE TEST MODE) | Stop distance: {stop_distance:.2f} pts | Risk: ${dollar_risk:.2f}")
         return contracts
 
-    def get_or_compute_session_boundaries(self, bars_df, session, current_date):
+    def get_or_compute_session_boundaries(self, bars_df, session, now_est):
         """
         Get cached session boundaries or compute if not cached.
         
         Caches: {dr_high, dr_low, idr_high, idr_low, dr_end, idr_std}
-        Key: (session, date_str)
+        Key: (session, session_date_str) where session_date is the RANGE day
+        (ADR note: for times between 00:00-01:00, session_date is previous day)
         
         Returns: dict or None if no valid boundaries
         """
-        cache_key = (session, current_date.isoformat())
+        # Determine the session date (range formation day)
+        session_date = now_est.date()
+        if session == 'adr' and now_est.time() < time(1, 0):
+            session_date = (now_est - timedelta(days=1)).date()
+
+        cache_key = (session, session_date.isoformat())
         
         # Check cache first
         if cache_key in self.session_cache:
@@ -123,12 +129,20 @@ class TopstepXMarketClient:
             return self.session_cache[cache_key]
         
         # Not cached - compute fresh
-        print(f"[Cache] Computing fresh boundaries for {session.upper()} on {current_date}")
+        print(f"[Cache] Computing fresh boundaries for {session.upper()} on {session_date}")
         boundaries = self.model.compute_boundaries(bars_df)
         session_bounds = boundaries[session]
         
-        # Get the most recent non-NaN boundaries for current session
-        valid_bounds = session_bounds.dropna(subset=['dr_high', 'dr_low', 'idr_high', 'idr_low'])
+        # Filter to the session_date ONLY (avoid picking yesterday's values)
+        try:
+            bounds_date = session_bounds.index.tz_convert('US/Eastern').date
+        except Exception:
+            bounds_date = session_bounds.index.date
+        day_mask = bounds_date == session_date
+        day_bounds = session_bounds[day_mask]
+
+        # Get the most recent non-NaN boundaries for the session_date only
+        valid_bounds = day_bounds.dropna(subset=['dr_high', 'dr_low', 'idr_high', 'idr_low'])
         if valid_bounds.empty:
             print(f"[Cache] No valid boundaries found for {session.upper()}")
             return None
@@ -141,8 +155,7 @@ class TopstepXMarketClient:
         dr_end = valid_bounds['dr_end'].iloc[-1]
         
         # Calculate IDR std dev for this session (used for take profit)
-        dr_bars = self.get_session_window_bars(bars_df, session, 
-                                                 datetime.now(pytz.utc).replace(tzinfo=pytz.utc).astimezone(pytz.timezone('US/Eastern')))
+        dr_bars = self.get_session_window_bars(bars_df, session, now_est)
         if not dr_bars.empty:
             idr_std = dr_bars['close'].std()
         else:
@@ -338,9 +351,8 @@ class TopstepXMarketClient:
         self.last_processed_bar[current_session] = latest_bar_time
         print(f"[Bar-Close] Processing new bar at {latest_bar_time.strftime('%H:%M:%S')}")
         
-        # Get or compute cached session boundaries
-        current_date = now_est.date()
-        cached_bounds = self.get_or_compute_session_boundaries(bars_df, current_session, current_date)
+        # Get or compute cached session boundaries for the correct session-date
+        cached_bounds = self.get_or_compute_session_boundaries(bars_df, current_session, now_est)
         
         if cached_bounds is None:
             print(f"[DR/IDR] No boundaries found for {current_session.upper()} session.")
