@@ -253,6 +253,8 @@ class TopstepXMarketClient:
             minimal_payload = {
                 "contractId": bars_contract,
                 "live": True,
+                "startTime": start_time_str,
+                "endTime": end_time_str,
                 "unit": BAR_UNIT,
                 "unitNumber": BAR_UNIT_NUMBER,
                 "limit": BAR_LIMIT,
