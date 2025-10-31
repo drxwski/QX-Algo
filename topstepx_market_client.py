@@ -233,6 +233,12 @@ class TopstepXMarketClient:
         }
         resp = topstepx_request("POST", "/api/History/retrieveBars", token=self.jwt_token, json=payload)
         bars = resp.get("bars", [])
+        # Retry once with live=True (some contracts/sessions require live flag)
+        if not bars:
+            print(f"[Bars] Empty response. Retrying with live=True | contractId={self.contract_id} | window={start_time_str}→{end_time_str}")
+            payload["live"] = True
+            resp = topstepx_request("POST", "/api/History/retrieveBars", token=self.jwt_token, json=payload)
+            bars = resp.get("bars", [])
         if not bars:
             print("No bars returned.")
             return pd.DataFrame()
