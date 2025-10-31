@@ -388,6 +388,12 @@ class TopstepXMarketClient:
         # Only act if DR window is complete
         dr_window_end = self.get_dr_window_end(current_session)
         dr_window_end_dt = now_est.replace(hour=dr_window_end.hour, minute=dr_window_end.minute, second=0, microsecond=0)
+
+        # Always emit a concise session status line
+        print(
+            f"[Session] {current_session.upper()} | Trades {self.session_trades[current_session]}/2 | "
+            f"Balance ${self.account_balance_virtual:.2f} | DR {dr_high:.2f}/{dr_low:.2f} | IDR {idr_high:.2f}/{idr_low:.2f}"
+        )
             
         if now_est.time() < dr_window_end:
             print(f"[Wait] DR window for {current_session.upper()} not complete (ends at {dr_window_end})")
@@ -404,6 +410,11 @@ class TopstepXMarketClient:
         # Only consider confirmations after DR window end
         conf_times = [t for t in conf_times.index if t.tz_convert('US/Eastern') > dr_window_end_dt]
         
+        # Log the most recent confirmation time seen (even if not tradable yet)
+        if len(confirmations[conf_col].dropna()) > 0:
+            last_any_conf = confirmations[conf_col].dropna().index[-1]
+            print(f"[Confirm] Last seen (bar) time: {last_any_conf.tz_convert('US/Eastern')}")
+
         if conf_times:
             # FIX: Read the actual confirmation time VALUE, not the bar timestamp
             conf_time_bar_index = conf_times[-1]
@@ -532,7 +543,7 @@ class TopstepXMarketClient:
             print(f"  Entry (20% retrace): {entry_price:.2f}")
             print(f"  Stop Loss (2pts from 50%): {stop_loss:.2f}")
             print(f"  Take Profit (1 std dev): {take_profit:.2f}")
-            print(f"  Position Size: {contracts} contract(s)")
+            print(f"  Position Size: {contracts} micro contract(s)")
             total_risk = abs(entry_price - stop_loss) * contracts * POINT_VALUE
             tp_value_75 = max(0, (take_profit - entry_price) * int(contracts * 0.75) * POINT_VALUE) if bias == 'bullish' else max(0, (entry_price - take_profit) * int(contracts * 0.75) * POINT_VALUE)
             print(f"  Risk: ${total_risk:.2f}")
