@@ -95,7 +95,7 @@ class TopstepXMarketClient:
             self.consecutive_wins = 0
             self.current_risk_percent = 0.01
         self.last_trade_win = trade_pnl > 0
-        print(f"[Risk] Updated: daily_pnl={self.daily_pnl}, virt_balance=${self.account_balance_virtual:.2f}, consecutive_wins={self.consecutive_wins}, consecutive_losses={self.consecutive_losses}, risk%=7.00")
+        print(f"[Risk] Updated: daily_pnl={self.daily_pnl}, virt_balance=${self.account_balance_virtual:.2f}, consecutive_wins={self.consecutive_wins}, consecutive_losses={self.consecutive_losses}, risk%=12.00")
 
     def can_trade(self, session_key):
         if self.daily_pnl <= -self.max_daily_loss:
@@ -112,10 +112,10 @@ class TopstepXMarketClient:
         ticks = stop_distance / TICK_SIZE
         risk_per_contract = ticks * TICK_VALUE                           # $ per contract at stop
         # 7% of current virtual balance
-        risk_dollars = max(0, self.account_balance_virtual * 0.07)
+        risk_dollars = max(0, self.account_balance_virtual * 0.12)
         contracts = max(1, int(risk_dollars // risk_per_contract)) if risk_per_contract > 0 else 1
         print(
-            f"[Risk] Position size calc | balance=${self.account_balance_virtual:.2f} | 7%=${risk_dollars:.2f} | stop={stop_distance:.2f}pts "
+            f"[Risk] Position size calc | balance=${self.account_balance_virtual:.2f} | 12%=${risk_dollars:.2f} | stop={stop_distance:.2f}pts "
             f"({ticks:.1f} ticks) | risk/ct=${risk_per_contract:.2f} | size={contracts}"
         )
         return contracts
