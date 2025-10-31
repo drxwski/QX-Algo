@@ -12,7 +12,8 @@ from model_logic import QXRange
 
 # === CONFIG ===
 BAR_INTERVAL_MINUTES = 5
-CONTRACT_NAME = "ESU5"
+# Switch to Micro E-mini S&P 500 (MES)
+CONTRACT_NAME = "MESZ5"
 ACCOUNT_NAME = os.getenv("TOPSTEPX_ACCOUNT_NAME", "50KTC-V2-282714-47179717")
 METRICS_PATH = os.path.join(os.path.dirname(__file__), 'es_dr_metrics.csv')
 ROLLING_BARS = 500  # Number of bars to keep in memory
@@ -21,6 +22,11 @@ BAR_UNIT = 2  # 2 = Minute
 BAR_UNIT_NUMBER = 5  # 5-minute bars
 BAR_LIMIT = 350  # Fetch last 350 bars each time
 ENABLE_LIVE_TRADING = True  # Set to False to disable live trading (CURRENTLY ENABLED)
+
+# Contract economics (MES)
+TICK_SIZE = 0.25
+TICK_VALUE = 1.25       # $1.25 per tick for MES
+POINT_VALUE = 5.0       # $5 per point for MES
 
 class TopstepXMarketClient:
     def __init__(self, jwt_token):
@@ -48,8 +54,10 @@ class TopstepXMarketClient:
         self.last_trade_win = None
         self.today = datetime.now(pytz.utc).date()
         self.open_trades = []  # Track open trades for trailing stop, session end, etc.
-        self.account_balance = 50000  # Your actual account balance
-        self.max_daily_loss = 900  # Maximum daily loss limit
+        # Virtual balance used for risk sizing (user-defined risk base)
+        self.account_balance_virtual = 2000.0
+        self.account_balance = self.account_balance_virtual
+        self.max_daily_loss = 2000  # Maximum daily loss limit (virtual P&L based)
         self.max_trades_per_session = 2  # Maximum trades per session
         self.last_confirmation_traded = {}  # session_key -> last confirmation timestamp
         self.last_dr_traded = {}  # session_key -> (dr_high, dr_low, bias) - prevent re-trading same DR break
@@ -73,6 +81,8 @@ class TopstepXMarketClient:
 
     def update_risk_state(self, trade_pnl):
         self.daily_pnl += trade_pnl
+        # Update virtual balance for next position sizing
+        self.account_balance_virtual += trade_pnl
         if trade_pnl > 0:
             self.consecutive_wins += 1
             self.consecutive_losses = 0
@@ -85,10 +95,10 @@ class TopstepXMarketClient:
             self.consecutive_wins = 0
             self.current_risk_percent = 0.01
         self.last_trade_win = trade_pnl > 0
-        print(f"[Risk] Updated: daily_pnl={self.daily_pnl}, consecutive_wins={self.consecutive_wins}, consecutive_losses={self.consecutive_losses}, risk%={self.current_risk_percent*100:.2f}")
+        print(f"[Risk] Updated: daily_pnl={self.daily_pnl}, virt_balance=${self.account_balance_virtual:.2f}, consecutive_wins={self.consecutive_wins}, consecutive_losses={self.consecutive_losses}, risk%=7.00")
 
     def can_trade(self, session_key):
-        if self.daily_pnl <= -900:
+        if self.daily_pnl <= -self.max_daily_loss:
             print(f"[Risk] Max daily loss reached: {self.daily_pnl}")
             return False
         if self.session_trades[session_key] >= 2:
@@ -97,13 +107,17 @@ class TopstepXMarketClient:
         return True
 
     def calculate_position_size(self, entry, stop):
-        # TESTING MODE: Force minimum position size (1 contract)
-        contracts = 1
-        stop_distance = abs(entry - stop)
-        tick_value = 12.5  # ES tick value
-        ticks = stop_distance / 0.25
-        dollar_risk = ticks * tick_value
-        print(f"[Risk] Position size: {contracts} contracts (MINIMUM SIZE TEST MODE) | Stop distance: {stop_distance:.2f} pts | Risk: ${dollar_risk:.2f}")
+        """Risk 7% of virtual balance using MES economics."""
+        stop_distance = abs(entry - stop)                                # points
+        ticks = stop_distance / TICK_SIZE
+        risk_per_contract = ticks * TICK_VALUE                           # $ per contract at stop
+        # 7% of current virtual balance
+        risk_dollars = max(0, self.account_balance_virtual * 0.07)
+        contracts = max(1, int(risk_dollars // risk_per_contract)) if risk_per_contract > 0 else 1
+        print(
+            f"[Risk] Position size calc | balance=${self.account_balance_virtual:.2f} | 7%=${risk_dollars:.2f} | stop={stop_distance:.2f}pts "
+            f"({ticks:.1f} ticks) | risk/ct=${risk_per_contract:.2f} | size={contracts}"
+        )
         return contracts
 
     def get_or_compute_session_boundaries(self, bars_df, session, now_est):
@@ -187,7 +201,10 @@ class TopstepXMarketClient:
             raise Exception(f'Account {ACCOUNT_NAME} not found!')
         contracts = search_contracts(token, live=False)
         for c in contracts:
-            if c.get('name') == CONTRACT_NAME or 'E-Mini S&P 500' in c.get('description', ''):
+            desc = c.get('description', '')
+            name = c.get('name')
+            # Prefer exact symbol, then explicit Micro description
+            if name == CONTRACT_NAME or 'Micro E-mini S&P 500' in desc:
                 self.contract_id = c['id']
                 break
         if not self.contract_id:
@@ -516,7 +533,10 @@ class TopstepXMarketClient:
             print(f"  Stop Loss (2pts from 50%): {stop_loss:.2f}")
             print(f"  Take Profit (1 std dev): {take_profit:.2f}")
             print(f"  Position Size: {contracts} contract(s)")
-            print(f"  Risk: ${abs(entry_price - stop_loss) * contracts * 50:.2f}")
+            total_risk = abs(entry_price - stop_loss) * contracts * POINT_VALUE
+            tp_value_75 = max(0, (take_profit - entry_price) * int(contracts * 0.75) * POINT_VALUE) if bias == 'bullish' else max(0, (entry_price - take_profit) * int(contracts * 0.75) * POINT_VALUE)
+            print(f"  Risk: ${total_risk:.2f}")
+            print(f"  75% TP return (value): ${tp_value_75:.2f}")
             print(f"{'='*70}\n")
             
             order_id = ''
@@ -613,9 +633,9 @@ class TopstepXMarketClient:
                 print(f"  Closing {contracts_remaining} contract(s) at market")
                 # Calculate P&L (simulated for now)
                 if bias == 'bullish':
-                    pnl = (current_price - entry) * contracts_remaining * 50
+                    pnl = (current_price - entry) * contracts_remaining * POINT_VALUE
                 else:
-                    pnl = (entry - current_price) * contracts_remaining * 50
+                    pnl = (entry - current_price) * contracts_remaining * POINT_VALUE
                 print(f"  Estimated P&L: ${pnl:.2f}")
                 self.update_risk_state(pnl)
                 self.open_trades.remove(trade)
@@ -631,7 +651,7 @@ class TopstepXMarketClient:
                 if current_price <= stop:
                     print(f"\n[EXIT] Stop Loss hit for Order {order_id}")
                     print(f"  Price: {current_price:.2f} <= Stop: {stop:.2f}")
-                    pnl = (current_price - entry) * contracts_remaining * 50
+                    pnl = (current_price - entry) * contracts_remaining * POINT_VALUE
                     print(f"  Loss: ${pnl:.2f}")
                     self.update_risk_state(pnl)
                     self.open_trades.remove(trade)
@@ -644,7 +664,7 @@ class TopstepXMarketClient:
                         print(f"\n[EXIT] Take Profit hit for Order {order_id}")
                         print(f"  Price: {current_price:.2f} >= Target: {tp:.2f}")
                         print(f"  Closing 75% ({contracts_to_close} contracts)")
-                        partial_pnl = (current_price - entry) * contracts_to_close * 50
+                        partial_pnl = (current_price - entry) * contracts_to_close * POINT_VALUE
                         print(f"  Profit: ${partial_pnl:.2f}")
                         
                         trade['partial_taken'] = True
@@ -668,7 +688,7 @@ class TopstepXMarketClient:
                     if current_price <= trade['trailing_stop_price']:
                         print(f"\n[EXIT] Trailing Stop hit for Order {order_id}")
                         print(f"  Price: {current_price:.2f} <= Trail: {trade['trailing_stop_price']:.2f}")
-                        remaining_pnl = (current_price - entry) * contracts_remaining * 50
+                        remaining_pnl = (current_price - entry) * contracts_remaining * POINT_VALUE
                         print(f"  Profit: ${remaining_pnl:.2f}")
                         self.update_risk_state(remaining_pnl)
                         self.open_trades.remove(trade)
@@ -683,7 +703,7 @@ class TopstepXMarketClient:
                 if current_price >= stop:
                     print(f"\n[EXIT] Stop Loss hit for Order {order_id}")
                     print(f"  Price: {current_price:.2f} >= Stop: {stop:.2f}")
-                    pnl = (entry - current_price) * contracts_remaining * 50
+                    pnl = (entry - current_price) * contracts_remaining * POINT_VALUE
                     print(f"  Loss: ${pnl:.2f}")
                     self.update_risk_state(pnl)
                     self.open_trades.remove(trade)
@@ -696,7 +716,7 @@ class TopstepXMarketClient:
                         print(f"\n[EXIT] Take Profit hit for Order {order_id}")
                         print(f"  Price: {current_price:.2f} <= Target: {tp:.2f}")
                         print(f"  Closing 75% ({contracts_to_close} contracts)")
-                        partial_pnl = (entry - current_price) * contracts_to_close * 50
+                        partial_pnl = (entry - current_price) * contracts_to_close * POINT_VALUE
                         print(f"  Profit: ${partial_pnl:.2f}")
                         
                         trade['partial_taken'] = True
@@ -720,7 +740,7 @@ class TopstepXMarketClient:
                     if current_price >= trade['trailing_stop_price']:
                         print(f"\n[EXIT] Trailing Stop hit for Order {order_id}")
                         print(f"  Price: {current_price:.2f} >= Trail: {trade['trailing_stop_price']:.2f}")
-                        remaining_pnl = (entry - current_price) * contracts_remaining * 50
+                        remaining_pnl = (entry - current_price) * contracts_remaining * POINT_VALUE
                         print(f"  Profit: ${remaining_pnl:.2f}")
                         self.update_risk_state(remaining_pnl)
                         self.open_trades.remove(trade)
