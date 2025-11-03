@@ -203,7 +203,9 @@ def search_contracts(token=None, live=True, searchText="ES"):
     payload = {"live": bool(live), "searchText": searchText}
     resp, _ = topstepx_request("POST", endpoint, token=token, json=payload)
     print("[TopstepX] Contracts response:", resp)
-    return resp.get("contracts") or resp
+    # Return empty list if no contracts found, not the full response dict
+    contracts = resp.get("contracts")
+    return contracts if contracts is not None else []
 
 def place_order(account_id, contract_id, size=1, side=1, order_type=2, price=None, token=None, return_token=False):
     """

@@ -49,18 +49,52 @@ class TopstepXMarketClient:
 
         mes_id = None
         es_id = None
-        try:
-            contracts = search_contracts(self.jwt_token, live=True)
-        except Exception:
-            contracts = search_contracts(self.jwt_token, live=False)
+        
+        # Try multiple search strategies
+        search_terms = ["MES", "ES", ""]  # Empty string searches all contracts
+        contracts = []
+        
+        for search_term in search_terms:
+            try:
+                print(f"[Contracts] Searching for '{search_term}' (live=True)...")
+                contracts = search_contracts(self.jwt_token, live=True, searchText=search_term)
+                if contracts:
+                    print(f"[Contracts] Found {len(contracts)} contracts with search term '{search_term}'")
+                    break
+            except Exception as e:
+                print(f"[Contracts] Live search failed: {e}")
+                try:
+                    print(f"[Contracts] Searching for '{search_term}' (live=False)...")
+                    contracts = search_contracts(self.jwt_token, live=False, searchText=search_term)
+                    if contracts:
+                        print(f"[Contracts] Found {len(contracts)} contracts with search term '{search_term}'")
+                        break
+                except Exception as e2:
+                    print(f"[Contracts] Simulated search also failed: {e2}")
+        
+        if not contracts:
+            print("[Contracts][WARNING] No contracts found with any search term!")
+            return None, None
 
+        # Parse contracts to find MES and ES
         for c in contracts:
+            if not isinstance(c, dict):
+                print(f"[Contracts][WARNING] Unexpected contract format: {c}")
+                continue
+                
             name = (c.get('name') or "").upper().replace("-", "").replace("/", "").strip()
             desc = (c.get('description') or "").upper()
+            
+            # Debug: print first few contracts
+            if mes_id is None or es_id is None:
+                print(f"[Contracts] Checking: {c.get('name')} - {c.get('description')}")
+            
             if name in wanted_mes or ("MICRO" in desc and "S&P" in desc and "Z5" in desc):
                 mes_id = c["id"]
+                print(f"[Contracts] Found MES: {c.get('name')} (ID: {mes_id})")
             if name in wanted_es or ("E-MINI" in desc and "S&P" in desc and "MICRO" not in desc and "Z5" in desc):
                 es_id = c["id"]
+                print(f"[Contracts] Found ES: {c.get('name')} (ID: {es_id})")
 
         return mes_id, es_id
     def _refresh_contracts(self):
@@ -250,6 +284,9 @@ class TopstepXMarketClient:
                 break
         if not self.account_id:
             raise Exception(f'Account {ACCOUNT_NAME} not found!')
+        
+        print(f'[TopstepXMarketClient] Found account: {ACCOUNT_NAME} (ID: {self.account_id})')
+        
         self.contract_id = None
         self.contract_id_es = None
 
@@ -260,10 +297,27 @@ class TopstepXMarketClient:
             self.contract_id_es = es_id
 
         if not self.contract_id:
-            raise Exception(f'Contract {CONTRACT_NAME} not found! (MES)')
-        print(f'[TopstepXMarketClient] Using account_id={self.account_id}, trade_contract_id={self.contract_id} (MES), bars_fallback_id={self.contract_id_es}')
+            print(f'[TopstepXMarketClient][ERROR] Contract {CONTRACT_NAME} not found! (MES)')
+            print(f'[TopstepXMarketClient][ERROR] No trading contracts available. Will retry on first bar fetch.')
+            # Don't raise exception - allow the client to start and retry later
+        else:
+            print(f'[TopstepXMarketClient] Using account_id={self.account_id}, trade_contract_id={self.contract_id} (MES), bars_fallback_id={self.contract_id_es}')
 
     def fetch_latest_bars(self):
+        # If no contracts found during init, try again now
+        if not self.contract_id and not self.contract_id_es:
+            print("[Bars] No contracts available, retrying contract search...")
+            mes_id, es_id = self._pick_contract_ids()
+            if mes_id:
+                self.contract_id = mes_id
+            if es_id:
+                self.contract_id_es = es_id
+            if self.contract_id or self.contract_id_es:
+                print(f"[Bars] Contracts found: MES={self.contract_id}, ES={self.contract_id_es}")
+            else:
+                print("[Bars][ERROR] Still no contracts available, cannot fetch bars")
+                return pd.DataFrame()
+        
         now = datetime.now(pytz.utc)
         # Nudge back 10s and round down to last completed minute
         end_time = (now - timedelta(seconds=10)).replace(second=0, microsecond=0)
@@ -275,6 +329,10 @@ class TopstepXMarketClient:
         
         # ALWAYS use ES bars for signal generation if available; trade on MES
         bars_contract = self.contract_id_es or self.contract_id
+        if not bars_contract:
+            print("[Bars][ERROR] No contract ID available for fetching bars")
+            return pd.DataFrame()
+            
         if bars_contract != self.contract_id:
             print(f"[Bars] Using ES for analysis (contractId={bars_contract}); orders on MES (contractId={self.contract_id})")
 
