@@ -34,7 +34,8 @@ def authenticate_with_key(username=None, api_key=None):
     if username is None:
         username = os.getenv("TOPSTEPX_USERNAME")
     if api_key is None:
-        api_key = os.getenv("TOPSTEPX_API_KEY")
+        # Support both names
+        api_key = os.getenv("TOPSTEPX_APIKEY") or os.getenv("TOPSTEPX_API_KEY")
     if not username or not api_key:
         raise TopstepXAuthError("Missing TopstepX username or API key. Set TOPSTEPX_USERNAME and TOPSTEPX_API_KEY.")
 
@@ -141,6 +142,8 @@ def topstepx_request(method, endpoint, token=None, base_url="https://api.topstep
     - endpoint: e.g., '/api/Account/info'
     - token: session token (if None, will call authenticate())
     - kwargs: passed to requests.request
+    
+    Returns: tuple of (response_data, token) where token may be refreshed on 401
     """
     if token is None:
         token = authenticate()
@@ -148,12 +151,18 @@ def topstepx_request(method, endpoint, token=None, base_url="https://api.topstep
     headers = kwargs.pop("headers", {})
     headers["Authorization"] = f"Bearer {token}"
     headers.setdefault("accept", "application/json")
-    resp = requests.request(method, url, headers=headers, timeout=10, **kwargs)
+    resp = requests.request(method, url, headers=headers, timeout=20, **kwargs)
+    if resp.status_code == 401:
+        # Retry once with fresh token
+        print("[TopstepX] Token expired (401), re-authenticating...")
+        token = authenticate()
+        headers["Authorization"] = f"Bearer {token}"
+        resp = requests.request(method, url, headers=headers, timeout=20, **kwargs)
     try:
         resp.raise_for_status()
-        return resp.json()
+        return resp.json(), token  # Return both response and (possibly refreshed) token
     except Exception as e:
-        print(f"[TopstepX] Request failed: {e}\nResponse: {resp.text}")
+        print(f"[TopstepX] Request failed: {e}\nResponse: {getattr(resp,'text', '')}")
         raise
 
 def get_account_info(token=None):
@@ -161,7 +170,8 @@ def get_account_info(token=None):
     Example: Get account info from TopstepX.
     """
     endpoint = "/api/Account/info"
-    return topstepx_request("GET", endpoint, token=token)
+    resp, _ = topstepx_request("GET", endpoint, token=token)
+    return resp
 
 def validate_token(token=None):
     """
@@ -169,7 +179,7 @@ def validate_token(token=None):
     """
     endpoint = "/api/Auth/validate"
     try:
-        resp = topstepx_request("POST", endpoint, token=token)
+        resp, _ = topstepx_request("POST", endpoint, token=token)
         print("[TopstepX] Token validation response:", resp)
         return resp.get("success", False)
     except Exception as e:
@@ -183,22 +193,19 @@ def search_accounts(token=None, only_active=True):
     """
     endpoint = "/api/Account/search"
     payload = {"onlyActiveAccounts": only_active}
-    resp = topstepx_request("POST", endpoint, token=token, json=payload)
+    resp, _ = topstepx_request("POST", endpoint, token=token, json=payload)
     print("[TopstepX] Accounts response:", resp)
     return resp.get("accounts") or resp
 
-def search_contracts(token=None, live=True):
-    """
-    Retrieve a list of available contracts.
-    Returns a list of contracts.
-    """
-    endpoint = "/api/Contract/available"
-    payload = {"live": live}
-    resp = topstepx_request("POST", endpoint, token=token, json=payload)
+def search_contracts(token=None, live=True, searchText="ES"):
+    """Search contracts by text; defaults to ES.*. Uses /api/Contract/search."""
+    endpoint = "/api/Contract/search"
+    payload = {"live": bool(live), "searchText": searchText}
+    resp, _ = topstepx_request("POST", endpoint, token=token, json=payload)
     print("[TopstepX] Contracts response:", resp)
     return resp.get("contracts") or resp
 
-def place_order(account_id, contract_id, size=1, side=1, order_type=2, price=None, token=None):
+def place_order(account_id, contract_id, size=1, side=1, order_type=2, price=None, token=None, return_token=False):
     """
     Place an order on TopstepX.
     - account_id: int
@@ -207,7 +214,8 @@ def place_order(account_id, contract_id, size=1, side=1, order_type=2, price=Non
     - side: 1=Buy (Ask), 2=Sell (Bid)
     - order_type: 1=Limit, 2=Market
     - price: float (required for limit orders)
-    Returns the order response.
+    - return_token: bool - if True, returns (response, token) tuple
+    Returns the order response (or tuple of response and token if return_token=True).
     """
     endpoint = "/api/Order/place"
     payload = {
@@ -222,8 +230,10 @@ def place_order(account_id, contract_id, size=1, side=1, order_type=2, price=Non
     if price is not None:
         payload["price"] = price
     
-    resp = topstepx_request("POST", endpoint, token=token, json=payload)
+    resp, new_token = topstepx_request("POST", endpoint, token=token, json=payload)
     print("[TopstepX] Place order response:", resp)
+    if return_token:
+        return resp, new_token
     return resp
 
 def retrieve_bars(contract_id, start_time, end_time, unit=BAR_UNIT_MINUTE, unit_number=5, 
@@ -281,7 +291,7 @@ def retrieve_bars(contract_id, start_time, end_time, unit=BAR_UNIT_MINUTE, unit_
         "limit": limit,
         "includePartialBar": include_partial_bar
     }
-    resp = topstepx_request("POST", endpoint, token=token, json=payload)
+    resp, _ = topstepx_request("POST", endpoint, token=token, json=payload)
     print(f"[TopstepX] Retrieved {len(resp.get('bars', []))} bars")
     return resp
 

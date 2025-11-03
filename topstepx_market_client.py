@@ -27,6 +27,7 @@ ENABLE_LIVE_TRADING = True  # Set to False to disable live trading (CURRENTLY EN
 TICK_SIZE = 0.25
 TICK_VALUE = 1.25       # $1.25 per tick for MES
 POINT_VALUE = 5.0       # $5 per point for MES
+RISK_PCT = 0.12         # Actual risk percentage used for position sizing
 
 class TopstepXMarketClient:
     def __init__(self, jwt_token):
@@ -37,6 +38,43 @@ class TopstepXMarketClient:
         self.contract_id = None            # Trading contract (MES)
         self.contract_id_es = None         # Fallback bars contract (ES)
         self._init_account_contract()
+
+    def _pick_contract_ids(self):
+        """
+        Resolve explicit Z5 contracts for MES (trade) and ES (analysis).
+        Prefer exact month symbols; fall back to description heuristics.
+        """
+        wanted_mes = {"MESZ5", "MES Z5", "MES 202512"}
+        wanted_es  = {"ESZ5", "EPZ5", "ES Z5", "EP Z5", "ES 202512", "EP 202512"}
+
+        mes_id = None
+        es_id = None
+        try:
+            contracts = search_contracts(self.jwt_token, live=True)
+        except Exception:
+            contracts = search_contracts(self.jwt_token, live=False)
+
+        for c in contracts:
+            name = (c.get('name') or "").upper().replace("-", "").replace("/", "").strip()
+            desc = (c.get('description') or "").upper()
+            if name in wanted_mes or ("MICRO" in desc and "S&P" in desc and "Z5" in desc):
+                mes_id = c["id"]
+            if name in wanted_es or ("E-MINI" in desc and "S&P" in desc and "MICRO" not in desc and "Z5" in desc):
+                es_id = c["id"]
+
+        return mes_id, es_id
+    def _refresh_contracts(self):
+        """Re-resolve MES (trade) and ES (analysis) contract IDs from API without resetting model state."""
+        try:
+            mes_id, es_id = self._pick_contract_ids()
+            if mes_id:
+                self.contract_id = mes_id
+            if es_id:
+                self.contract_id_es = es_id
+            print(f"[Contracts] Refreshed: MES={self.contract_id} ES={self.contract_id_es}")
+        except Exception as e:
+            print(f"[Contracts][ERROR] Refresh failed: {e}")
+
         # QXSignalGenerator setup
         time_bins = pd.date_range('00:00', '23:59', freq='1min').strftime('%H:%M')
         mode_retrace_sd = pd.DataFrame({'threshold': [1.0]*len(time_bins)}, index=time_bins)
@@ -96,7 +134,11 @@ class TopstepXMarketClient:
             self.consecutive_wins = 0
             self.current_risk_percent = 0.01
         self.last_trade_win = trade_pnl > 0
-        print(f"[Risk] Updated: daily_pnl={self.daily_pnl}, virt_balance=${self.account_balance_virtual:.2f}, consecutive_wins={self.consecutive_wins}, consecutive_losses={self.consecutive_losses}, risk%=12.00")
+        print(
+            f"[Risk] Updated: daily_pnl={self.daily_pnl}, virt_balance=${self.account_balance_virtual:.2f}, "
+            f"consecutive_wins={self.consecutive_wins}, consecutive_losses={self.consecutive_losses}, "
+            f"risk%={(RISK_PCT*100):.2f}"
+        )
 
     def can_trade(self, session_key):
         if self.daily_pnl <= -self.max_daily_loss:
@@ -108,15 +150,14 @@ class TopstepXMarketClient:
         return True
 
     def calculate_position_size(self, entry, stop):
-        """Risk 7% of virtual balance using MES economics."""
+        """Risk RISK_PCT of virtual balance using MES economics."""
         stop_distance = abs(entry - stop)                                # points
         ticks = stop_distance / TICK_SIZE
         risk_per_contract = ticks * TICK_VALUE                           # $ per contract at stop
-        # 7% of current virtual balance
-        risk_dollars = max(0, self.account_balance_virtual * 0.12)
+        risk_dollars = max(0, self.account_balance_virtual * RISK_PCT)
         contracts = max(1, int(risk_dollars // risk_per_contract)) if risk_per_contract > 0 else 1
         print(
-            f"[Risk] Position size calc | balance=${self.account_balance_virtual:.2f} | 12%=${risk_dollars:.2f} | stop={stop_distance:.2f}pts "
+            f"[Risk] Position size calc | balance=${self.account_balance_virtual:.2f} | {(RISK_PCT*100):.0f}%=${risk_dollars:.2f} | stop={stop_distance:.2f}pts "
             f"({ticks:.1f} ticks) | risk/ct=${risk_per_contract:.2f} | size={contracts}"
         )
         return contracts
@@ -140,7 +181,7 @@ class TopstepXMarketClient:
         
         # Check cache first
         if cache_key in self.session_cache:
-            print(f"[Cache] Using cached boundaries for {session.upper()} on {current_date}")
+            print(f"[Cache] Using cached boundaries for {session.upper()} on {session_date}")
             return self.session_cache[cache_key]
         
         # Not cached - compute fresh
@@ -191,6 +232,15 @@ class TopstepXMarketClient:
         
         return cached
 
+    def _debug_resp(self, tag, resp):
+        try:
+            keys = list(resp.keys()) if isinstance(resp, dict) else []
+            print(f"[Bars][DEBUG] {tag} keys: {keys}")
+            if isinstance(resp, dict) and 'error' in resp:
+                print(f"[Bars][ERROR] {resp['error']}")
+        except Exception:
+            pass
+
     def _init_account_contract(self):
         token = self.jwt_token
         accounts = search_accounts(token)
@@ -200,29 +250,28 @@ class TopstepXMarketClient:
                 break
         if not self.account_id:
             raise Exception(f'Account {ACCOUNT_NAME} not found!')
-        contracts = search_contracts(token, live=False)
-        for c in contracts:
-            desc = c.get('description', '')
-            name = c.get('name')
-            if name == CONTRACT_NAME or 'Micro E-mini S&P 500' in desc:
-                self.contract_id = c['id']
-            if name and name.startswith('ES') or 'E-Mini S&P 500' in desc and 'Micro' not in desc:
-                # Standard ES contract for bars fallback
-                self.contract_id_es = c['id']
-        
+        self.contract_id = None
+        self.contract_id_es = None
+
+        mes_id, es_id = self._pick_contract_ids()
+        if mes_id:
+            self.contract_id = mes_id
+        if es_id:
+            self.contract_id_es = es_id
+
         if not self.contract_id:
-            raise Exception(f'Contract {CONTRACT_NAME} not found!')
+            raise Exception(f'Contract {CONTRACT_NAME} not found! (MES)')
         print(f'[TopstepXMarketClient] Using account_id={self.account_id}, trade_contract_id={self.contract_id} (MES), bars_fallback_id={self.contract_id_es}')
 
     def fetch_latest_bars(self):
         now = datetime.now(pytz.utc)
-        end_time = now.replace(second=0, microsecond=0)
+        # Nudge back 10s and round down to last completed minute
+        end_time = (now - timedelta(seconds=10)).replace(second=0, microsecond=0)
         start_time = end_time - timedelta(minutes=BAR_UNIT_NUMBER * BAR_LIMIT)
         
-        # Format datetimes for TopstepX API (expects UTC ISO format with Z suffix)
-        # Remove timezone info before isoformat to avoid +00:00 in output
-        start_time_str = start_time.replace(tzinfo=None).isoformat() + "Z"
-        end_time_str = end_time.replace(tzinfo=None).isoformat() + "Z"
+        # Proper Z-suffixed UTC strings
+        start_time_str = start_time.astimezone(pytz.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        end_time_str   = end_time.astimezone(pytz.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
         
         # ALWAYS use ES bars for signal generation if available; trade on MES
         bars_contract = self.contract_id_es or self.contract_id
@@ -237,45 +286,57 @@ class TopstepXMarketClient:
             "unit": BAR_UNIT,
             "unitNumber": BAR_UNIT_NUMBER,
             "limit": BAR_LIMIT,
-            "includePartialBar": False
+            "includePartialBar": True
         }
-        resp = topstepx_request("POST", "/api/History/retrieveBars", token=self.jwt_token, json=payload)
+        resp, self.jwt_token = topstepx_request("POST", "/api/History/retrieveBars", token=self.jwt_token, json=payload)
         bars = resp.get("bars", [])
+        if not bars:
+            self._debug_resp("primary", resp)
         # Retry once with live=True (some contracts/sessions require live flag)
         if not bars:
             print(f"[Bars] Empty response. Retrying with live=True | contractId={bars_contract} | window={start_time_str}→{end_time_str}")
             payload["live"] = True
-            resp = topstepx_request("POST", "/api/History/retrieveBars", token=self.jwt_token, json=payload)
+            resp, self.jwt_token = topstepx_request("POST", "/api/History/retrieveBars", token=self.jwt_token, json=payload)
             bars = resp.get("bars", [])
+            if not bars:
+                self._debug_resp("retry-live", resp)
+        # If still empty, refresh contract IDs and try again quickly
+        if not bars:
+            self._refresh_contracts()
+            payload["contractId"] = self.contract_id_es or bars_contract
+            resp, self.jwt_token = topstepx_request("POST", "/api/History/retrieveBars", token=self.jwt_token, json=payload)
+            bars = resp.get("bars", [])
+            if not bars:
+                self._debug_resp("retry-refreshed", resp)
         if not bars:
             # Last resort: fetch by limit only (no time window) and allow partial bar
-            print("[Bars] Final attempt: limit-only query (includePartialBar=True)")
+            print("[Bars] Final attempt: true limit-only (no start/end), includePartialBar=True")
             minimal_payload = {
                 "contractId": bars_contract,
                 "live": True,
-                "startTime": start_time_str,
-                "endTime": end_time_str,
                 "unit": BAR_UNIT,
                 "unitNumber": BAR_UNIT_NUMBER,
                 "limit": BAR_LIMIT,
                 "includePartialBar": True
             }
-            resp = topstepx_request("POST", "/api/History/retrieveBars", token=self.jwt_token, json=minimal_payload)
+            resp, self.jwt_token = topstepx_request("POST", "/api/History/retrieveBars", token=self.jwt_token, json=minimal_payload)
             bars = resp.get("bars", [])
+            if not bars:
+                self._debug_resp("limit-only ES", resp)
             if not bars and bars_contract != self.contract_id:
                 # If ES also fails, last-ditch try with MES
-                print("[Bars] Final attempt fallback to MES (limit-only)")
+                print("[Bars] Final attempt fallback to MES (true limit-only)")
                 minimal_payload["contractId"] = self.contract_id
-                resp = topstepx_request("POST", "/api/History/retrieveBars", token=self.jwt_token, json=minimal_payload)
+                resp, self.jwt_token = topstepx_request("POST", "/api/History/retrieveBars", token=self.jwt_token, json=minimal_payload)
                 bars = resp.get("bars", [])
+                if not bars:
+                    self._debug_resp("limit-only MES", resp)
         if not bars:
             print("No bars returned.")
             return pd.DataFrame()
         df = pd.DataFrame(bars)
-        df['t'] = pd.to_datetime(df['t'])
-        # Convert to Eastern time (data is already UTC-aware)
-        if df['t'].dt.tz is None:
-            df['t'] = df['t'].dt.tz_localize('UTC')
+        df['t'] = pd.to_datetime(df['t'], utc=True, errors='coerce')
+        df = df.dropna(subset=['t'])
         df['t'] = df['t'].dt.tz_convert('US/Eastern')
         df = df.rename(columns={'t': 'start', 'o': 'open', 'h': 'high', 'l': 'low', 'c': 'close', 'v': 'volume'})
         df = df.set_index('start')
@@ -589,13 +650,14 @@ class TopstepXMarketClient:
             if ENABLE_LIVE_TRADING:
                 try:
                     print(f"[TRADE] Placing MARKET order (price hit {entry_price:.2f})...")
-                    order_resp = place_order(
+                    order_resp, self.jwt_token = place_order(
                         account_id=self.account_id,
                         contract_id=self.contract_id,
                         size=contracts,
                         side=side,
                         order_type=2,
-                        token=self.jwt_token
+                        token=self.jwt_token,
+                        return_token=True
                     )
                     
                     if order_resp and 'orderId' in order_resp:
