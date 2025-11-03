@@ -37,78 +37,15 @@ class TopstepXMarketClient:
         self.account_id = None
         self.contract_id = None            # Trading contract (MES)
         self.contract_id_es = None         # Fallback bars contract (ES)
+        
+        # Initialize all state variables
+        self._init_state()
+        
+        # Find account and contracts
         self._init_account_contract()
-
-    def _pick_contract_ids(self):
-        """
-        Resolve explicit Z5 contracts for MES (trade) and ES (analysis).
-        Prefer exact month symbols; fall back to description heuristics.
-        """
-        wanted_mes = {"MESZ5", "MES Z5", "MES 202512"}
-        wanted_es  = {"ESZ5", "EPZ5", "ES Z5", "EP Z5", "ES 202512", "EP 202512"}
-
-        mes_id = None
-        es_id = None
-        
-        # Try multiple search strategies
-        search_terms = ["MES", "ES", ""]  # Empty string searches all contracts
-        contracts = []
-        
-        for search_term in search_terms:
-            try:
-                print(f"[Contracts] Searching for '{search_term}' (live=True)...")
-                contracts = search_contracts(self.jwt_token, live=True, searchText=search_term)
-                if contracts:
-                    print(f"[Contracts] Found {len(contracts)} contracts with search term '{search_term}'")
-                    break
-            except Exception as e:
-                print(f"[Contracts] Live search failed: {e}")
-                try:
-                    print(f"[Contracts] Searching for '{search_term}' (live=False)...")
-                    contracts = search_contracts(self.jwt_token, live=False, searchText=search_term)
-                    if contracts:
-                        print(f"[Contracts] Found {len(contracts)} contracts with search term '{search_term}'")
-                        break
-                except Exception as e2:
-                    print(f"[Contracts] Simulated search also failed: {e2}")
-        
-        if not contracts:
-            print("[Contracts][WARNING] No contracts found with any search term!")
-            return None, None
-
-        # Parse contracts to find MES and ES
-        for c in contracts:
-            if not isinstance(c, dict):
-                print(f"[Contracts][WARNING] Unexpected contract format: {c}")
-                continue
-                
-            name = (c.get('name') or "").upper().replace("-", "").replace("/", "").strip()
-            desc = (c.get('description') or "").upper()
-            
-            # Debug: print first few contracts
-            if mes_id is None or es_id is None:
-                print(f"[Contracts] Checking: {c.get('name')} - {c.get('description')}")
-            
-            if name in wanted_mes or ("MICRO" in desc and "S&P" in desc and "Z5" in desc):
-                mes_id = c["id"]
-                print(f"[Contracts] Found MES: {c.get('name')} (ID: {mes_id})")
-            if name in wanted_es or ("E-MINI" in desc and "S&P" in desc and "MICRO" not in desc and "Z5" in desc):
-                es_id = c["id"]
-                print(f"[Contracts] Found ES: {c.get('name')} (ID: {es_id})")
-
-        return mes_id, es_id
-    def _refresh_contracts(self):
-        """Re-resolve MES (trade) and ES (analysis) contract IDs from API without resetting model state."""
-        try:
-            mes_id, es_id = self._pick_contract_ids()
-            if mes_id:
-                self.contract_id = mes_id
-            if es_id:
-                self.contract_id_es = es_id
-            print(f"[Contracts] Refreshed: MES={self.contract_id} ES={self.contract_id_es}")
-        except Exception as e:
-            print(f"[Contracts][ERROR] Refresh failed: {e}")
-
+    
+    def _init_state(self):
+        """Initialize all state variables used by the trading system."""
         # QXSignalGenerator setup
         time_bins = pd.date_range('00:00', '23:59', freq='1min').strftime('%H:%M')
         mode_retrace_sd = pd.DataFrame({'threshold': [1.0]*len(time_bins)}, index=time_bins)
@@ -136,6 +73,82 @@ class TopstepXMarketClient:
         self.last_dr_traded = {}  # session_key -> (dr_high, dr_low, bias) - prevent re-trading same DR break
         self.last_processed_bar = {}  # session_key -> last bar timestamp (bar-close trigger)
         self.session_cache = {}  # (session, date) -> {dr_high, dr_low, idr_high, idr_low, dr_end, idr_std}
+
+    def _pick_contract_ids(self):
+        """
+        Resolve explicit Z5 contracts for MES (trade) and ES (analysis).
+        Prefer exact month symbols; fall back to description heuristics.
+        """
+        wanted_mes = {"MESZ5", "MES Z5", "MES 202512"}
+        wanted_es  = {"ESZ5", "EPZ5", "ES Z5", "EP Z5", "ES 202512", "EP 202512"}
+
+        mes_id = None
+        es_id = None
+        
+        # Try multiple search strategies with both live=True and live=False
+        search_terms = ["MES", "ES", ""]  # Empty string searches all contracts
+        contracts = []
+        
+        for search_term in search_terms:
+            # Try live=False first for simulated accounts
+            for live_flag in [False, True]:
+                try:
+                    print(f"[Contracts] Searching for '{search_term or 'ALL'}' (live={live_flag})...")
+                    contracts = search_contracts(self.jwt_token, live=live_flag, searchText=search_term)
+                    if contracts:
+                        print(f"[Contracts] Found {len(contracts)} contracts with search term '{search_term or 'ALL'}' (live={live_flag})")
+                        break  # Break inner loop
+                except Exception as e:
+                    print(f"[Contracts] Search failed (live={live_flag}): {e}")
+            
+            if contracts:
+                break  # Break outer loop if we found contracts
+        
+        if not contracts:
+            print("[Contracts][WARNING] No contracts found with any search term!")
+            print("[Contracts][WARNING] This may indicate:")
+            print("  1. Account is simulated and not yet activated")
+            print("  2. No contracts are available for trading")
+            print("  3. API permissions issue")
+            return None, None
+
+        # Parse contracts to find MES and ES
+        print(f"[Contracts] Parsing {len(contracts)} contracts...")
+        for i, c in enumerate(contracts):
+            if not isinstance(c, dict):
+                print(f"[Contracts][WARNING] Unexpected contract format: {c}")
+                continue
+                
+            name = (c.get('name') or "").upper().replace("-", "").replace("/", "").strip()
+            desc = (c.get('description') or "").upper()
+            
+            # Debug: print first 10 contracts to see what's available
+            if i < 10:
+                print(f"[Contracts] [{i+1}] {c.get('name')} - {c.get('description')}")
+            
+            if name in wanted_mes or ("MICRO" in desc and "S&P" in desc and "Z5" in desc):
+                mes_id = c["id"]
+                print(f"[Contracts] ✓ Found MES: {c.get('name')} (ID: {mes_id})")
+            if name in wanted_es or ("E-MINI" in desc and "S&P" in desc and "MICRO" not in desc and "Z5" in desc):
+                es_id = c["id"]
+                print(f"[Contracts] ✓ Found ES: {c.get('name')} (ID: {es_id})")
+
+        if not mes_id and not es_id:
+            print("[Contracts][WARNING] No MES or ES contracts found in results")
+            print("[Contracts][INFO] Consider checking contract naming or availability")
+        
+        return mes_id, es_id
+    def _refresh_contracts(self):
+        """Re-resolve MES (trade) and ES (analysis) contract IDs from API without resetting model state."""
+        try:
+            mes_id, es_id = self._pick_contract_ids()
+            if mes_id:
+                self.contract_id = mes_id
+            if es_id:
+                self.contract_id_es = es_id
+            print(f"[Contracts] Refreshed: MES={self.contract_id} ES={self.contract_id_es}")
+        except Exception as e:
+            print(f"[Contracts][ERROR] Refresh failed: {e}")
 
     def reset_daily(self):
         self.daily_pnl = 0
