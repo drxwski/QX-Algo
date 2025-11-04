@@ -589,12 +589,6 @@ class TopstepXMarketClient:
             
             print(f"[Confirmation] Detected at {conf_time} (checked at {now_est.strftime('%H:%M:%S')})")
             
-            # SAFETY CHECK: Only trade fresh confirmations (within last 10 minutes)
-            time_since_conf = (now_est - conf_time.tz_convert('US/Eastern')).total_seconds() / 60
-            if time_since_conf > 10:
-                print(f"[Status] Confirmation is {time_since_conf:.1f} minutes old - too old to trade (10 min limit)")
-                return
-            
             # SAFETY CHECK: Don't re-trade the same confirmation
             last_traded = self.last_confirmation_traded.get(session)
             if last_traded is not None and conf_time == last_traded:
