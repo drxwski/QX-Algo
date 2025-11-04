@@ -20,8 +20,12 @@ class QXRange:
     def compute_boundaries(self, df: pd.DataFrame) -> dict:
         """
         Compute DR/IDR boundaries for each session with correct logic:
-        - DR: High/Low of time range (using 'high'/'low' columns)
-        - IDR: High Close/Low Close of time range (using 'close' column)
+        - DR: High/Low of time range (using 'high'/'low' columns - includes wicks)
+        - IDR: Body High/Body Low (using max/min of 'open'/'close' - excludes wicks)
+        
+        IDR focuses on candle bodies only:
+        - IDR High = highest point where any candle body reached (max of open/close per bar)
+        - IDR Low = lowest point where any candle body reached (min of open/close per bar)
         """
         # Data is already in Eastern Time - no timezone conversion needed
         df = df.copy()
@@ -55,24 +59,32 @@ class QXRange:
                 session_data = day_data[time_mask]
                 
                 if not session_data.empty and len(session_data) >= 5:
-                    # Calculate DR levels (High/Low of time range)
+                    # Calculate DR levels (High/Low of time range - includes wicks)
                     dr_high = session_data['high'].max()
                     dr_low = session_data['low'].min()
                     
-                    # Calculate IDR levels (High Close/Low Close of time range)
-                    idr_high = session_data['close'].max()
-                    idr_low = session_data['close'].min()
+                    # Calculate IDR levels (Body High/Body Low - excludes wicks)
+                    # IDR High = highest point where any candle body reached (max of open/close)
+                    # IDR Low = lowest point where any candle body reached (min of open/close)
+                    session_data_copy = session_data.copy()
+                    session_data_copy['body_high'] = session_data_copy[['open', 'close']].max(axis=1)
+                    session_data_copy['body_low'] = session_data_copy[['open', 'close']].min(axis=1)
+                    idr_high = session_data_copy['body_high'].max()
+                    idr_low = session_data_copy['body_low'].min()
                     
-                    # Debug: Show all bars in session with their closes AND lows
+                    # Debug: Show all bars in session with body high/low
                     print(f"    [{session.upper()}] {date} | Bars: {len(session_data)} | Range: {session_data.index[0].strftime('%H:%M')} - {session_data.index[-1].strftime('%H:%M')}")
-                    print(f"    Bars in session (Close / Low):")
+                    print(f"    Bars in session (Open->Close / Body High/Low):")
                     for idx in session_data.index[:12]:  # Show first 12 bars
+                        open_val = session_data.loc[idx, 'open']
                         close_val = session_data.loc[idx, 'close']
-                        low_val = session_data.loc[idx, 'low']
-                        marker = " <-- IDR LOW (close)" if close_val == idr_low else ""
-                        print(f"      {idx.strftime('%H:%M')}: Close {close_val:.2f} / Low {low_val:.2f}{marker}")
-                    print(f"    IDR High/Low: {idr_high:.2f} / {idr_low:.2f} (based on closes)")
-                    print(f"    DR High/Low: {dr_high:.2f} / {dr_low:.2f} (based on actual high/low)")
+                        body_high_val = session_data_copy.loc[idx, 'body_high']
+                        body_low_val = session_data_copy.loc[idx, 'body_low']
+                        marker_high = " <-- IDR HIGH" if body_high_val == idr_high else ""
+                        marker_low = " <-- IDR LOW" if body_low_val == idr_low else ""
+                        print(f"      {idx.strftime('%H:%M')}: {open_val:.2f}->{close_val:.2f} (Body: {body_high_val:.2f}/{body_low_val:.2f}){marker_high}{marker_low}")
+                    print(f"    IDR High/Low: {idr_high:.2f} / {idr_low:.2f} (based on candle bodies)")
+                    print(f"    DR High/Low: {dr_high:.2f} / {dr_low:.2f} (based on actual high/low with wicks)")
                     
                     # DR session end time for confirmation detection
                     dr_end_time = session_data.index[-1]
