@@ -73,6 +73,7 @@ class TopstepXMarketClient:
         self.last_dr_traded = {}  # session_key -> (dr_high, dr_low, bias) - prevent re-trading same DR break
         self.last_processed_bar = {}  # session_key -> last bar timestamp (bar-close trigger)
         self.session_cache = {}  # (session, date) -> {dr_high, dr_low, idr_high, idr_low, dr_end, idr_std}
+        print("[Init] Session boundary cache cleared (fresh IDR calculations on startup)")
 
     def _pick_contract_ids(self):
         """
@@ -228,12 +229,17 @@ class TopstepXMarketClient:
         
         # Check cache first
         if cache_key in self.session_cache:
-            print(f"[Cache] Using cached boundaries for {session.upper()} on {session_date}")
-            return self.session_cache[cache_key]
+            cached = self.session_cache[cache_key]
+            dr_high = cached['dr_high']
+            dr_low = cached['dr_low']
+            idr_high = cached['idr_high']
+            idr_low = cached['idr_low']
+            print(f"[DR/IDR] {session.upper()} | DR: {dr_high:.2f}/{dr_low:.2f} | IDR: {idr_high:.2f}/{idr_low:.2f}")
+            return cached
         
-        # Not cached - compute fresh
-        print(f"[Cache] Computing fresh boundaries for {session.upper()} on {session_date}")
-        boundaries = self.model.compute_boundaries(bars_df)
+        # Not cached - compute fresh for this session/date only
+        target_timestamp = pd.Timestamp.combine(session_date, time(12, 0)).tz_localize('US/Eastern')
+        boundaries = self.model.compute_boundaries(bars_df, session_name=session, target_date=target_timestamp)
         session_bounds = boundaries[session]
         
         # Filter to the session_date ONLY (avoid picking yesterday's values)
@@ -247,7 +253,7 @@ class TopstepXMarketClient:
         # Get the most recent non-NaN boundaries for the session_date only
         valid_bounds = day_bounds.dropna(subset=['dr_high', 'dr_low', 'idr_high', 'idr_low'])
         if valid_bounds.empty:
-            print(f"[Cache] No valid boundaries found for {session.upper()}")
+            print(f"[DR/IDR] No valid boundaries found for {session.upper()}")
             return None
         
         # Extract values
@@ -275,7 +281,6 @@ class TopstepXMarketClient:
             'idr_std': idr_std
         }
         self.session_cache[cache_key] = cached
-        print(f"[Cache] Cached boundaries: DR {dr_high:.2f}/{dr_low:.2f} | IDR {idr_high:.2f}/{idr_low:.2f} | Std {idr_std:.2f}")
         
         return cached
 
@@ -533,7 +538,6 @@ class TopstepXMarketClient:
         
         # Mark as processed BEFORE evaluation (idempotency)
         self.last_processed_bar[current_session] = latest_bar_time
-        print(f"[Bar-Close] Processing new bar at {latest_bar_time.strftime('%H:%M:%S')}")
         
         # Get or compute cached session boundaries for the correct session-date
         cached_bounds = self.get_or_compute_session_boundaries(bars_df, current_session, now_est)
@@ -550,17 +554,12 @@ class TopstepXMarketClient:
         dr_end = cached_bounds['dr_end']
         idr_std = cached_bounds['idr_std']
         
-        print(f"[DR/IDR] {current_session.upper()} | DR: {dr_high:.2f}/{dr_low:.2f} | IDR: {idr_high:.2f}/{idr_low:.2f}")
-        
         # Only act if DR window is complete
         dr_window_end = self.get_dr_window_end(current_session)
         dr_window_end_dt = now_est.replace(hour=dr_window_end.hour, minute=dr_window_end.minute, second=0, microsecond=0)
 
-        # Always emit a concise session status line
-        print(
-            f"[Session] {current_session.upper()} | Trades {self.session_trades[current_session]}/2 | "
-            f"Balance ${self.account_balance_virtual:.2f} | DR {dr_high:.2f}/{dr_low:.2f} | IDR {idr_high:.2f}/{idr_low:.2f}"
-        )
+        # Session status
+        print(f"[Session] {current_session.upper()} | Trades {self.session_trades[current_session]}/2 | Balance ${self.account_balance_virtual:.2f}")
             
         if now_est.time() < dr_window_end:
             print(f"[Wait] DR window for {current_session.upper()} not complete (ends at {dr_window_end})")
@@ -577,17 +576,12 @@ class TopstepXMarketClient:
         # Only consider confirmations after DR window end
         conf_times = [t for t in conf_times.index if t.tz_convert('US/Eastern') > dr_window_end_dt]
         
-        # Log the most recent confirmation time seen (even if not tradable yet)
-        if len(confirmations[conf_col].dropna()) > 0:
-            last_any_conf = confirmations[conf_col].dropna().index[-1]
-            print(f"[Confirm] Last seen (bar) time: {last_any_conf.tz_convert('US/Eastern')}")
-
         if conf_times:
             # FIX: Read the actual confirmation time VALUE, not the bar timestamp
             conf_time_bar_index = conf_times[-1]
             conf_time = confirmations.loc[conf_time_bar_index, conf_col]
             
-            print(f"[Confirmation] Detected at {conf_time} (checked at {now_est.strftime('%H:%M:%S')})")
+            print(f"[Confirmation] {session.upper()} detected at {conf_time.strftime('%H:%M:%S')}")
             
             # SAFETY CHECK: Don't re-trade the same confirmation
             last_traded = self.last_confirmation_traded.get(session)

@@ -17,15 +17,20 @@ class QXRange:
         self.adr_start = time(19, 30)  # 7:30 PM
         self.adr_end = time(20, 25)    # 8:25 PM (ends at 8:25 close, before 8:30)
 
-    def compute_boundaries(self, df: pd.DataFrame) -> dict:
+    def compute_boundaries(self, df: pd.DataFrame, session_name: str = None, target_date: pd.Timestamp = None) -> dict:
         """
-        Compute DR/IDR boundaries for each session with correct logic:
+        Compute DR/IDR boundaries for a specific session and date.
         - DR: High/Low of time range (using 'high'/'low' columns - includes wicks)
         - IDR: Body High/Body Low (using max/min of 'open'/'close' - excludes wicks)
         
         IDR focuses on candle bodies only:
         - IDR High = highest point where any candle body reached (max of open/close per bar)
         - IDR Low = lowest point where any candle body reached (min of open/close per bar)
+        
+        Args:
+            df: DataFrame with bars
+            session_name: 'rdr', 'odr', or 'adr' - if None, processes all (for backwards compat)
+            target_date: Date to process - if None, processes all dates
         """
         # Data is already in Eastern Time - no timezone conversion needed
         df = df.copy()
@@ -39,9 +44,10 @@ class QXRange:
             'adr': (self.adr_start, self.adr_end)
         }
         
-        for session, (start_time, end_time) in sessions.items():
-            print(f"  Processing {session.upper()} session...")
-            
+        # If session_name specified, only process that session
+        sessions_to_process = {session_name: sessions[session_name]} if session_name and session_name in sessions else sessions
+        
+        for session, (start_time, end_time) in sessions_to_process.items():
             # OPTIMIZED: Use groupby instead of nested loops
             df['date'] = df.index.date
             daily_groups = df.groupby('date')
@@ -50,6 +56,18 @@ class QXRange:
             daily_results = []
             
             for date, day_data in daily_groups:
+                # If target_date specified, only process that date
+                if target_date is not None and date != target_date.date():
+                    # Fill with NaN for this date
+                    day_data = day_data.copy()
+                    day_data['dr_high'] = np.nan
+                    day_data['dr_low'] = np.nan
+                    day_data['idr_high'] = np.nan
+                    day_data['idr_low'] = np.nan
+                    day_data['dr_end'] = pd.NaT
+                    daily_results.append(day_data[['dr_high', 'dr_low', 'idr_high', 'idr_low', 'dr_end']])
+                    continue
+                
                 # Filter to session time range - RANGE SESSIONS for DR/IDR calculation
                 time_mask = (
                     (day_data.index.time >= start_time) & 
@@ -72,19 +90,9 @@ class QXRange:
                     idr_high = session_data_copy['body_high'].max()
                     idr_low = session_data_copy['body_low'].min()
                     
-                    # Debug: Show all bars in session with body high/low
-                    print(f"    [{session.upper()}] {date} | Bars: {len(session_data)} | Range: {session_data.index[0].strftime('%H:%M')} - {session_data.index[-1].strftime('%H:%M')}")
-                    print(f"    Bars in session (Open->Close / Body High/Low):")
-                    for idx in session_data.index[:12]:  # Show first 12 bars
-                        open_val = session_data.loc[idx, 'open']
-                        close_val = session_data.loc[idx, 'close']
-                        body_high_val = session_data_copy.loc[idx, 'body_high']
-                        body_low_val = session_data_copy.loc[idx, 'body_low']
-                        marker_high = " <-- IDR HIGH" if body_high_val == idr_high else ""
-                        marker_low = " <-- IDR LOW" if body_low_val == idr_low else ""
-                        print(f"      {idx.strftime('%H:%M')}: {open_val:.2f}->{close_val:.2f} (Body: {body_high_val:.2f}/{body_low_val:.2f}){marker_high}{marker_low}")
-                    print(f"    IDR High/Low: {idr_high:.2f} / {idr_low:.2f} (based on candle bodies)")
-                    print(f"    DR High/Low: {dr_high:.2f} / {dr_low:.2f} (based on actual high/low with wicks)")
+                    # Only print debug for current session/date
+                    if session_name and target_date and date == target_date.date():
+                        print(f"[{session.upper()}] {date} | Range: {session_data.index[0].strftime('%H:%M')}-{session_data.index[-1].strftime('%H:%M')} | DR: {dr_high:.2f}/{dr_low:.2f} | IDR: {idr_high:.2f}/{idr_low:.2f}")
                     
                     # DR session end time for confirmation detection
                     dr_end_time = session_data.index[-1]
@@ -144,8 +152,6 @@ class QXRange:
         }
         
         for session in ['rdr', 'odr', 'adr']:
-            print(f"  Detecting {session.upper()} confirmations...")
-            
             session_bounds = bounds[session]
             
             # Initialize confirmation columns
