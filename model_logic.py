@@ -63,6 +63,15 @@ class QXRange:
                     idr_high = session_data['close'].max()
                     idr_low = session_data['close'].min()
                     
+                    # Debug: Show all bars in session with their closes
+                    print(f"    [{session.upper()}] {date} | Bars: {len(session_data)} | Range: {session_data.index[0].strftime('%H:%M')} - {session_data.index[-1].strftime('%H:%M')}")
+                    print(f"    Closes in session:")
+                    for idx in session_data.index[:12]:  # Show first 12 bars
+                        close_val = session_data.loc[idx, 'close']
+                        marker = " <-- IDR LOW" if close_val == idr_low else ""
+                        print(f"      {idx.strftime('%H:%M')}: {close_val:.2f}{marker}")
+                    print(f"    IDR: {idr_high:.2f} / {idr_low:.2f}")
+                    
                     # DR session end time for confirmation detection
                     dr_end_time = session_data.index[-1]
                 else:
