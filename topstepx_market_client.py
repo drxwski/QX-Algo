@@ -610,7 +610,14 @@ class TopstepXMarketClient:
             # Get current price
             current_price = bars_df['close'].iloc[-1]
             
-            print(f"[CONFIRMATION] {bias.upper()} at {conf_time} | Current Price: {current_price:.2f} | DR: {dr_high:.2f}/{dr_low:.2f}")
+            print(f"[CONFIRMATION] {bias.upper()} at {conf_time.strftime('%H:%M:%S')} | Current Price: {current_price:.2f} | DR: {dr_high:.2f}/{dr_low:.2f}")
+            
+            # SAFETY CHECK: 2-hour time limit from confirmation
+            time_since_conf = (now_est - conf_time.tz_convert('US/Eastern')).total_seconds() / 3600  # hours
+            if time_since_conf > 2.0:
+                print(f"[SKIP] Confirmation is {time_since_conf:.1f} hours old - expired (2 hour limit)")
+                self.session_trades[session] += 1  # Count it to prevent retry
+                return
             
             # SAFETY CHECK: Don't re-trade the same DR break - use date+session key so each day's session is independent
             today_date = now_est.date()
@@ -662,6 +669,12 @@ class TopstepXMarketClient:
                     self.session_trades[session] += 1  # Count it to prevent retry
                     return
                 
+                # SAFETY CHECK: If price already passed through entry (moving toward target), we missed it
+                if current_price > entry_price + 2.0:  # 2 points past entry
+                    print(f"[SKIP] Bullish - price already passed entry {entry_price:.2f} (current: {current_price:.2f}) - MISSED ENTRY")
+                    self.session_trades[session] += 1  # Count it to prevent retry
+                    return
+                
                 # Check if price has reached entry level
                 if current_price < entry_price:
                     print(f"[WAIT] Bullish - waiting for price to reach {entry_price:.2f} (current: {current_price:.2f})")
@@ -675,6 +688,18 @@ class TopstepXMarketClient:
                 take_profit = idr_low - idr_std
                 
                 side = 2  # SELL
+                
+                # SAFETY CHECK: If price already hit 1SD target, we missed the move - skip this session
+                if current_price <= take_profit:
+                    print(f"[SKIP] Bearish - price already at target {take_profit:.2f} (current: {current_price:.2f}) - MOVE MISSED")
+                    self.session_trades[session] += 1  # Count it to prevent retry
+                    return
+                
+                # SAFETY CHECK: If price already passed through entry (moving toward target), we missed it
+                if current_price < entry_price - 2.0:  # 2 points past entry
+                    print(f"[SKIP] Bearish - price already passed entry {entry_price:.2f} (current: {current_price:.2f}) - MISSED ENTRY")
+                    self.session_trades[session] += 1  # Count it to prevent retry
+                    return
                 
                 # Check if price has reached entry level
                 if current_price > entry_price:
