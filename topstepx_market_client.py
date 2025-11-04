@@ -631,16 +631,18 @@ class TopstepXMarketClient:
                 return
                 
             # ═══════════════════════════════════════════════════════════
-            # FIXED ENTRY MODEL (Testing Phase)
+            # FIXED ENTRY MODEL
             # ═══════════════════════════════════════════════════════════
-            # Entry: 20% of IDR range after confirmation
-            # Stop Loss: 2 points under/above 50% of IDR range
-            # Take Profit: 75% at 1 standard deviation of IDR
+            # Entry: 20% retrace from IDR high/low
+            # Stop Loss: 60% of IDR range (fixed level for both directions)
+            # Take Profit: 75% at 1 standard deviation from IDR
             # Trailing: 25% with 5-point trail until hit or session end
             # ═══════════════════════════════════════════════════════════
             
             idr_range = idr_high - idr_low
-            idr_midpoint = idr_low + (0.50 * idr_range)  # 50% of IDR
+            
+            # Stop Loss: Always at 60% of IDR range (same for bullish and bearish)
+            stop_loss = idr_low + (0.60 * idr_range)
             
             # Use cached IDR std dev (already computed in get_or_compute_session_boundaries)
             # idr_std is available from cached_bounds
@@ -648,9 +650,6 @@ class TopstepXMarketClient:
             if bias == 'bullish':
                 # Entry: 20% retrace from IDR high
                 entry_price = idr_high - (0.20 * idr_range)
-                
-                # Stop Loss: 2 points below 50% of IDR
-                stop_loss = idr_midpoint - 2.0
                 
                 # Take Profit: 1 std deviation above IDR high
                 take_profit = idr_high + idr_std
@@ -672,9 +671,6 @@ class TopstepXMarketClient:
                 # Entry: 20% retrace from IDR low
                 entry_price = idr_low + (0.20 * idr_range)
                 
-                # Stop Loss: 2 points above 50% of IDR
-                stop_loss = idr_midpoint + 2.0
-                
                 # Take Profit: 1 std deviation below IDR low
                 take_profit = idr_low - idr_std
                 
@@ -693,10 +689,9 @@ class TopstepXMarketClient:
             print(f"{'='*70}")
             print(f"  IDR Range: {idr_range:.2f} points")
             print(f"  IDR High: {idr_high:.2f} | IDR Low: {idr_low:.2f}")
-            print(f"  IDR Midpoint: {idr_midpoint:.2f}")
             print(f"  IDR Std Dev: {idr_std:.2f}")
             print(f"  Entry (20% retrace): {entry_price:.2f}")
-            print(f"  Stop Loss (2pts from 50%): {stop_loss:.2f}")
+            print(f"  Stop Loss (60% of range): {stop_loss:.2f}")
             print(f"  Take Profit (1 std dev): {take_profit:.2f}")
             print(f"  Position Size: {contracts} micro contract(s)")
             total_risk = abs(entry_price - stop_loss) * contracts * POINT_VALUE
