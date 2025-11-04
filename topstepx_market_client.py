@@ -662,9 +662,9 @@ class TopstepXMarketClient:
                     self.session_trades[session] += 1  # Count it to prevent retry
                     return
                 
-                # Check if price has retraced to entry level
-                if current_price > entry_price:
-                    print(f"[WAIT] Bullish - waiting for retrace to {entry_price:.2f} (current: {current_price:.2f})")
+                # Check if price has reached entry level
+                if current_price < entry_price:
+                    print(f"[WAIT] Bullish - waiting for price to reach {entry_price:.2f} (current: {current_price:.2f})")
                     return
                     
             else:  # bearish
@@ -676,9 +676,9 @@ class TopstepXMarketClient:
                 
                 side = 2  # SELL
                 
-                # Check if price has retraced to entry level
-                if current_price < entry_price:
-                    print(f"[WAIT] Bearish - waiting for retrace to {entry_price:.2f} (current: {current_price:.2f})")
+                # Check if price has reached entry level
+                if current_price > entry_price:
+                    print(f"[WAIT] Bearish - waiting for price to reach {entry_price:.2f} (current: {current_price:.2f})")
                     return
                     
             contracts = self.calculate_position_size(entry_price, stop_loss)
