@@ -655,7 +655,7 @@ class TopstepXMarketClient:
                 # Take Profit: 1 std deviation above IDR high
                 take_profit = idr_high + idr_std
                 
-                side = 2  # BUY
+                side = 1  # BUY
                 
                 # SAFETY CHECK: If price already hit 1SD target, we missed the move - skip this session
                 if current_price >= take_profit:
@@ -678,7 +678,7 @@ class TopstepXMarketClient:
                 # Take Profit: 1 std deviation below IDR low
                 take_profit = idr_low - idr_std
                 
-                side = 1  # SELL
+                side = 2  # SELL
                 
                 # Check if price has retraced to entry level
                 if current_price < entry_price:
