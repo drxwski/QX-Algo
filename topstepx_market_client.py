@@ -499,7 +499,7 @@ class TopstepXMarketClient:
         print("="*70)
         print(f"🚀 TOPSTEPX ALGO STARTED")
         print("="*70)
-        print("⚠️  2 trades/session | 10-min freshness | Market orders | Session independence")
+        print("⚠️  2 trades/session | Market orders | Session independence")
         print("="*70)
         print("Starting polling loop for new bars...")
         print()

@@ -93,6 +93,13 @@ class QXRange:
                     # Only print debug for current session/date
                     if session_name and target_date and date == target_date.date():
                         print(f"[{session.upper()}] {date} | Range: {session_data.index[0].strftime('%H:%M')}-{session_data.index[-1].strftime('%H:%M')} | DR: {dr_high:.2f}/{dr_low:.2f} | IDR: {idr_high:.2f}/{idr_low:.2f}")
+                        print(f"  Bars in session:")
+                        for idx in session_data.index:
+                            o = session_data.loc[idx, 'open']
+                            c = session_data.loc[idx, 'close']
+                            body_low = session_data_copy.loc[idx, 'body_low']
+                            marker = " <-- IDR LOW" if body_low == idr_low else ""
+                            print(f"    {idx.strftime('%H:%M')}: Open {o:.2f} -> Close {c:.2f} (Body Low: {body_low:.2f}){marker}")
                     
                     # DR session end time for confirmation detection
                     dr_end_time = session_data.index[-1]
