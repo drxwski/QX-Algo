@@ -3,7 +3,8 @@ import time as pytime
 from datetime import datetime, timedelta, time
 import pandas as pd
 from signal_module import QXSignalGenerator
-from topstepx_client import authenticate, search_accounts, search_contracts, place_order, topstepx_request
+from topstepx_client import (authenticate, search_accounts, search_contracts, place_order, topstepx_request,
+                              ORDER_SIDE_BUY, ORDER_SIDE_SELL)
 import numpy as np
 from collections import defaultdict
 import pytz
@@ -21,7 +22,7 @@ POLL_INTERVAL = 30  # 30 seconds (good balance of speed vs API calls)
 BAR_UNIT = 2  # 2 = Minute
 BAR_UNIT_NUMBER = 5  # 5-minute bars
 BAR_LIMIT = 350  # Fetch last 350 bars each time
-ENABLE_LIVE_TRADING = True  # Set to False to disable live trading (CURRENTLY ENABLED)
+ENABLE_LIVE_TRADING = False  # DISABLED - PAPER TRADING ONLY UNTIL BUGS FIXED
 
 # Contract economics (MES)
 TICK_SIZE = 0.25
@@ -499,6 +500,10 @@ class TopstepXMarketClient:
         print("="*70)
         print(f"🚀 TOPSTEPX ALGO STARTED")
         print("="*70)
+        if ENABLE_LIVE_TRADING:
+            print("🔴 LIVE TRADING ENABLED - REAL MONEY AT RISK")
+        else:
+            print("📝 PAPER TRADING MODE - NO REAL ORDERS PLACED")
         print("⚠️  2 trades/session | Market orders | Session independence")
         print("="*70)
         print("Starting polling loop for new bars...")
@@ -661,7 +666,7 @@ class TopstepXMarketClient:
                 # Take Profit: 1 std deviation above IDR high
                 take_profit = idr_high + idr_std
                 
-                side = 1  # BUY
+                side = ORDER_SIDE_BUY  # BUY (constant = 2)
                 
                 # SAFETY CHECK: If price already hit 1SD target, we missed the move - skip this session
                 if current_price >= take_profit:
@@ -679,6 +684,9 @@ class TopstepXMarketClient:
                 if current_price < entry_price:
                     print(f"[WAIT] Bullish - waiting for price to reach {entry_price:.2f} (current: {current_price:.2f})")
                     return
+                
+                # If we get here, price >= entry_price, so we can enter
+                print(f"[ENTRY CONDITION MET] Bullish - price {current_price:.2f} >= entry {entry_price:.2f}")
                     
             else:  # bearish
                 # Entry: 20% retrace from IDR low
@@ -687,7 +695,7 @@ class TopstepXMarketClient:
                 # Take Profit: 1 std deviation below IDR low
                 take_profit = idr_low - idr_std
                 
-                side = 2  # SELL
+                side = ORDER_SIDE_SELL  # SELL (constant = 1)
                 
                 # SAFETY CHECK: If price already hit 1SD target, we missed the move - skip this session
                 if current_price <= take_profit:
@@ -705,8 +713,12 @@ class TopstepXMarketClient:
                 if current_price > entry_price:
                     print(f"[WAIT] Bearish - waiting for price to reach {entry_price:.2f} (current: {current_price:.2f})")
                     return
+                
+                # If we get here, price <= entry_price, so we can enter
+                print(f"[ENTRY CONDITION MET] Bearish - price {current_price:.2f} <= entry {entry_price:.2f}")
                     
             contracts = self.calculate_position_size(entry_price, stop_loss)
+            print(f"[DEBUG] Calculated position size: {contracts} contracts")
             
             # Print signal with fixed model details
             print(f"\n{'='*70}")
@@ -728,7 +740,9 @@ class TopstepXMarketClient:
             order_id = ''
             if ENABLE_LIVE_TRADING:
                 try:
-                    print(f"[TRADE] Placing MARKET order (price hit {entry_price:.2f})...")
+                    side_name = "BUY" if side == ORDER_SIDE_BUY else "SELL"
+                    print(f"[TRADE] Placing MARKET {side_name} order (side={side}) at {entry_price:.2f}...")
+                    print(f"[TRADE] Confirmation bias: {bias} | Order side: {side_name} ({side})")
                     order_resp, self.jwt_token = place_order(
                         account_id=self.account_id,
                         contract_id=self.contract_id,

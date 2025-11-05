@@ -12,9 +12,9 @@ BAR_UNIT_DAY = 4
 BAR_UNIT_WEEK = 5
 BAR_UNIT_MONTH = 6
 
-# Order side constants
-ORDER_SIDE_SELL = 1  # Ask
-ORDER_SIDE_BUY = 2   # Bid
+# Order side constants (from TopstepX API docs)
+ORDER_SIDE_BUY = 1   # Ask - Buy at ask price (go LONG)
+ORDER_SIDE_SELL = 2  # Bid - Sell at bid price (go SHORT)
 
 # Order type constants
 ORDER_TYPE_MARKET = 2
