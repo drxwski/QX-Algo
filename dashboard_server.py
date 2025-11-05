@@ -11,15 +11,30 @@ import pytz
 import json
 import os
 from pathlib import Path
-import pandas as pd
+
+print("[Dashboard] Core imports successful")
+
+try:
+    import pandas as pd
+    print("[Dashboard] Pandas imported successfully")
+except ImportError as e:
+    print(f"[Dashboard] WARNING: Pandas import failed: {e}")
+    pd = None
 
 app = Flask(__name__)
 CORS(app)
+
+print("[Dashboard] Flask app initialized")
 
 # Paths
 TRADE_LOG_PATH = Path(__file__).parent / 'trade_log.csv'
 ALGO_LOG_PATH = Path(__file__).parent / 'algo.log'
 STATE_FILE = Path(__file__).parent / 'dashboard_state.json'
+
+print(f"[Dashboard] Paths configured:")
+print(f"  Trade log: {TRADE_LOG_PATH}")
+print(f"  Algo log: {ALGO_LOG_PATH}")
+print(f"  Templates: {app.template_folder}")
 
 def get_current_session():
     """Determine which session is currently active"""
@@ -41,6 +56,9 @@ def read_trade_log():
     if not TRADE_LOG_PATH.exists():
         return []
     
+    if pd is None:
+        return []
+    
     try:
         df = pd.read_csv(TRADE_LOG_PATH)
         # Get today's trades
@@ -56,7 +74,7 @@ def read_trade_log():
         
         return trades[-10:]  # Last 10 trades
     except Exception as e:
-        print(f"Error reading trade log: {e}")
+        print(f"[Dashboard] Error reading trade log: {e}")
         return []
 
 def read_algo_status():
@@ -128,7 +146,10 @@ def calculate_daily_pnl():
 @app.route('/')
 def index():
     """Serve the dashboard HTML - simplified version"""
-    return render_template('dashboard_simple.html')
+    try:
+        return render_template('dashboard_simple.html')
+    except Exception as e:
+        return f"<html><body><h1>Dashboard Error</h1><p>{str(e)}</p></body></html>", 500
 
 @app.route('/api/status')
 def api_status():
@@ -200,8 +221,17 @@ def health():
     """Health check endpoint for Railway"""
     return jsonify({'status': 'healthy', 'service': 'qx-algo-dashboard'})
 
+@app.route('/test')
+def test():
+    """Simple test endpoint"""
+    return "<html><body><h1>Dashboard Server is Working!</h1><p>If you see this, Flask is running correctly.</p></body></html>"
+
+print("[Dashboard] All routes configured successfully")
+print("[Dashboard] Application ready to serve requests")
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
+    print(f"[Dashboard] Starting Flask app on port {port}")
     app.run(host='0.0.0.0', port=port, debug=False)
 
 
