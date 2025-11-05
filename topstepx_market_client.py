@@ -669,8 +669,8 @@ class TopstepXMarketClient:
                     self.session_trades[session] += 1  # Count it to prevent retry
                     return
                 
-                # SAFETY CHECK: If price already passed through entry (moving toward target), we missed it
-                if current_price > entry_price + 2.0:  # 2 points past entry
+                # SAFETY CHECK: If price already passed through entry (retraced too far down), we missed it
+                if current_price < entry_price - 2.0:  # 2 points below entry (retraced past it)
                     print(f"[SKIP] Bullish - price already passed entry {entry_price:.2f} (current: {current_price:.2f}) - MISSED ENTRY")
                     self.session_trades[session] += 1  # Count it to prevent retry
                     return
@@ -695,8 +695,8 @@ class TopstepXMarketClient:
                     self.session_trades[session] += 1  # Count it to prevent retry
                     return
                 
-                # SAFETY CHECK: If price already passed through entry (moving toward target), we missed it
-                if current_price < entry_price - 2.0:  # 2 points past entry
+                # SAFETY CHECK: If price already passed through entry (retraced too far up), we missed it
+                if current_price > entry_price + 2.0:  # 2 points above entry (retraced past it)
                     print(f"[SKIP] Bearish - price already passed entry {entry_price:.2f} (current: {current_price:.2f}) - MISSED ENTRY")
                     self.session_trades[session] += 1  # Count it to prevent retry
                     return
