@@ -127,8 +127,8 @@ def calculate_daily_pnl():
 
 @app.route('/')
 def index():
-    """Serve the dashboard HTML"""
-    return render_template('dashboard_mobile.html')
+    """Serve the dashboard HTML - simplified version"""
+    return render_template('dashboard_simple.html')
 
 @app.route('/api/status')
 def api_status():
@@ -161,4 +161,5 @@ def health():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+
 

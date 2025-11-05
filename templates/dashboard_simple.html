@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>QX Algo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 15px;
+            color: #333;
+        }
+        
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        
+        .card {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 15px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        
+        h1 {
+            font-size: 24px;
+            margin-bottom: 10px;
+            color: #667eea;
+        }
+        
+        .status {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 15px 0;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 18px;
+            font-weight: 600;
+        }
+        
+        .dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+        
+        .dot.online { background: #10b981; }
+        .dot.offline { background: #ef4444; }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .session-badge {
+            background: #667eea;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            margin: 15px 0;
+        }
+        
+        .metric {
+            text-align: center;
+        }
+        
+        .metric-value {
+            font-size: 28px;
+            font-weight: 700;
+            color: #667eea;
+            margin-bottom: 5px;
+        }
+        
+        .metric-value.positive { color: #10b981; }
+        .metric-value.negative { color: #ef4444; }
+        
+        .metric-label {
+            font-size: 12px;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .levels {
+            background: #f8fafc;
+            padding: 15px;
+            border-radius: 10px;
+            margin: 15px 0;
+        }
+        
+        .level-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+        
+        .level-label {
+            color: #666;
+            font-weight: 500;
+        }
+        
+        .level-value {
+            font-weight: 700;
+            color: #333;
+        }
+        
+        .logs {
+            background: #1e293b;
+            color: #94a3b8;
+            padding: 15px;
+            border-radius: 10px;
+            height: 300px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+            line-height: 1.6;
+        }
+        
+        .log-line {
+            margin-bottom: 4px;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        
+        .log-success { color: #10b981; }
+        .log-error { color: #ef4444; }
+        .log-warning { color: #f59e0b; }
+        .log-info { color: #3b82f6; }
+        
+        .timestamp {
+            text-align: center;
+            color: rgba(255,255,255,0.7);
+            font-size: 12px;
+            margin-top: 10px;
+        }
+        
+        h2 {
+            font-size: 16px;
+            color: #667eea;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Status Card -->
+        <div class="card">
+            <h1>QX Algo Monitor</h1>
+            <div class="status">
+                <div class="status-indicator">
+                    <span class="dot offline" id="status-dot"></span>
+                    <span id="status-text">Checking...</span>
+                </div>
+                <div class="session-badge" id="session-badge">--</div>
+            </div>
+            
+            <div class="metrics">
+                <div class="metric">
+                    <div class="metric-value" id="pnl">$0</div>
+                    <div class="metric-label">P&L Today</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value" id="trades">0</div>
+                    <div class="metric-label">Trades</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Levels Card -->
+        <div class="card">
+            <h2>📊 Session Levels</h2>
+            <div class="levels" id="levels">
+                <div class="level-row">
+                    <span class="level-label">Waiting for data...</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Logs Card -->
+        <div class="card">
+            <h2>📡 Live Output</h2>
+            <div class="logs" id="logs">
+                <div class="log-line">Connecting to algo...</div>
+            </div>
+        </div>
+        
+        <div class="timestamp" id="timestamp">
+            Last update: --
+        </div>
+    </div>
+    
+    <script>
+        async function update() {
+            try {
+                // Get status
+                const statusResp = await fetch('/api/status');
+                const status = await statusResp.json();
+                
+                // Update status indicator
+                const dot = document.getElementById('status-dot');
+                const text = document.getElementById('status-text');
+                if (status.algo_running) {
+                    dot.className = 'dot online';
+                    text.textContent = 'Running';
+                } else {
+                    dot.className = 'dot offline';
+                    text.textContent = 'Stopped';
+                }
+                
+                // Update session
+                document.getElementById('session-badge').textContent = status.current_session;
+                
+                // Update metrics
+                const pnl = status.stats.daily_pnl;
+                const pnlEl = document.getElementById('pnl');
+                pnlEl.textContent = `$${pnl.toFixed(0)}`;
+                pnlEl.className = 'metric-value ' + (pnl >= 0 ? 'positive' : 'negative');
+                
+                document.getElementById('trades').textContent = status.stats.total_trades;
+                
+                // Update levels (parse from logs for DR/IDR)
+                const logsResp = await fetch('/api/logs?lines=50');
+                const logsData = await logsResp.json();
+                const logs = logsData.logs;
+                
+                // Find latest DR/IDR line
+                const drIdrLine = logs.reverse().find(l => l.includes('[DR/IDR]'));
+                if (drIdrLine) {
+                    // Parse: [DR/IDR] ADR | DR: 6783.25/6754.75 | IDR: 6782.75/6756.25
+                    const match = drIdrLine.match(/DR:\s*([\d.]+)\/([\d.]+)\s*\|\s*IDR:\s*([\d.]+)\/([\d.]+)/);
+                    if (match) {
+                        document.getElementById('levels').innerHTML = `
+                            <div class="level-row">
+                                <span class="level-label">DR High:</span>
+                                <span class="level-value">${match[1]}</span>
+                            </div>
+                            <div class="level-row">
+                                <span class="level-label">DR Low:</span>
+                                <span class="level-value">${match[2]}</span>
+                            </div>
+                            <div class="level-row">
+                                <span class="level-label">IDR High:</span>
+                                <span class="level-value">${match[3]}</span>
+                            </div>
+                            <div class="level-row">
+                                <span class="level-label">IDR Low:</span>
+                                <span class="level-value">${match[4]}</span>
+                            </div>
+                        `;
+                    }
+                }
+                
+                // Update logs (last 30 lines, filtered)
+                const logsEl = document.getElementById('logs');
+                logsEl.innerHTML = '';
+                const relevantLogs = logs.slice(-30).filter(l => 
+                    l.includes('[Session]') ||
+                    l.includes('[DR/IDR]') ||
+                    l.includes('[Confirmation]') ||
+                    l.includes('[SIGNAL]') ||
+                    l.includes('[TRADE]') ||
+                    l.includes('[WAIT]') ||
+                    l.includes('[SKIP]') ||
+                    l.includes('[EXIT]') ||
+                    l.includes('✓') ||
+                    l.includes('❌')
+                );
+                
+                relevantLogs.forEach(line => {
+                    const div = document.createElement('div');
+                    div.className = 'log-line';
+                    
+                    if (line.includes('✓') || line.includes('[TRADE]')) {
+                        div.classList.add('log-success');
+                    } else if (line.includes('❌') || line.includes('[ERROR]')) {
+                        div.classList.add('log-error');
+                    } else if (line.includes('[Confirmation]') || line.includes('[SIGNAL]')) {
+                        div.classList.add('log-warning');
+                    } else if (line.includes('[WAIT]')) {
+                        div.classList.add('log-info');
+                    }
+                    
+                    div.textContent = line;
+                    logsEl.appendChild(div);
+                });
+                
+                // Auto-scroll
+                logsEl.scrollTop = logsEl.scrollHeight;
+                
+                // Update timestamp
+                document.getElementById('timestamp').textContent = 
+                    `Last update: ${new Date().toLocaleTimeString()}`;
+                    
+            } catch (error) {
+                console.error('Update error:', error);
+            }
+        }
+        
+        // Update every 5 seconds
+        update();
+        setInterval(update, 5000);
+    </script>
+</body>
+</html>
+

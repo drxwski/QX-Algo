@@ -140,8 +140,8 @@ def get_recent_logs(lines=50):
 
 @app.route('/')
 def index():
-    """Main dashboard page"""
-    return render_template('dashboard.html')
+    """Main dashboard page - simplified mobile version"""
+    return render_template('dashboard_simple.html')
 
 @app.route('/api/status')
 def api_status():
@@ -205,4 +205,5 @@ def api_control(action):
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+
 
