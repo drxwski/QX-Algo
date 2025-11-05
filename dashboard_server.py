@@ -4,7 +4,7 @@ QX Algo Monitoring Dashboard - Mobile-Friendly
 Runs on Railway, accessible from anywhere
 """
 
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, request
 from flask_cors import CORS
 from datetime import datetime, time
 import pytz
@@ -133,25 +133,67 @@ def index():
 @app.route('/api/status')
 def api_status():
     """API endpoint for dashboard data"""
-    eastern = pytz.timezone('US/Eastern')
-    now = datetime.now(pytz.utc).astimezone(eastern)
-    
-    current_session, session_window = get_current_session()
-    algo_status = read_algo_status()
-    trades = read_trade_log()
-    pnl = calculate_daily_pnl()
-    
-    return jsonify({
-        'timestamp': now.strftime('%Y-%m-%d %H:%M:%S EST'),
-        'current_session': current_session,
-        'session_window': f"{session_window[0].strftime('%H:%M')}-{session_window[1].strftime('%H:%M')}" if session_window else 'None',
-        'algo_running': algo_status['running'],
-        'last_update': algo_status['last_update'],
-        'last_bar': algo_status.get('last_bar'),
-        'dr_idr': algo_status.get('dr_idr'),
-        'pnl': pnl,
-        'recent_trades': trades
-    })
+    try:
+        eastern = pytz.timezone('US/Eastern')
+        now = datetime.now(pytz.utc).astimezone(eastern)
+        
+        current_session, session_window = get_current_session()
+        algo_status = read_algo_status()
+        trades = read_trade_log()
+        pnl = calculate_daily_pnl()
+        
+        return jsonify({
+            'timestamp': now.strftime('%Y-%m-%d %H:%M:%S EST'),
+            'current_session': current_session,
+            'session_window': f"{session_window[0].strftime('%H:%M')}-{session_window[1].strftime('%H:%M')}" if session_window else 'None',
+            'algo_running': algo_status['running'],
+            'last_update': algo_status['last_update'],
+            'last_bar': algo_status.get('last_bar'),
+            'dr_idr': algo_status.get('dr_idr'),
+            'stats': {
+                'daily_pnl': pnl['total'],
+                'total_trades': pnl['trades_count'],
+                'win_rate': 0,
+                'open_positions': 0,
+                'session_counts': {'rdr': 0, 'odr': 0, 'adr': 0}
+            },
+            'recent_trades': trades
+        })
+    except Exception as e:
+        # Return safe defaults if anything fails
+        return jsonify({
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S EST'),
+            'current_session': 'ERROR',
+            'session_window': 'N/A',
+            'algo_running': False,
+            'last_update': f'Error: {str(e)}',
+            'stats': {
+                'daily_pnl': 0,
+                'total_trades': 0,
+                'win_rate': 0,
+                'open_positions': 0,
+                'session_counts': {'rdr': 0, 'odr': 0, 'adr': 0}
+            },
+            'recent_trades': []
+        })
+
+@app.route('/api/logs')
+def api_logs():
+    """Get recent algo logs"""
+    try:
+        lines_requested = int(request.args.get('lines', 100))
+        
+        if not ALGO_LOG_PATH.exists():
+            return jsonify({'logs': ['Waiting for algo to start...']})
+        
+        with open(ALGO_LOG_PATH, 'r') as f:
+            all_lines = f.readlines()
+            recent = all_lines[-lines_requested:]
+            # Clean and filter
+            cleaned = [line.strip() for line in recent if line.strip()]
+            return jsonify({'logs': cleaned})
+    except Exception as e:
+        return jsonify({'logs': [f'Error reading logs: {str(e)}']})
 
 @app.route('/health')
 def health():
