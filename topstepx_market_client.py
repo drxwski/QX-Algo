@@ -22,7 +22,7 @@ POLL_INTERVAL = 30  # 30 seconds (good balance of speed vs API calls)
 BAR_UNIT = 2  # 2 = Minute
 BAR_UNIT_NUMBER = 5  # 5-minute bars
 BAR_LIMIT = 350  # Fetch last 350 bars each time
-ENABLE_LIVE_TRADING = False  # DISABLED - PAPER TRADING ONLY UNTIL BUGS FIXED
+ENABLE_LIVE_TRADING = True  # ✅ LIVE TRADING ENABLED - Entry logic bugs fixed
 
 # Contract economics (MES)
 TICK_SIZE = 0.25
