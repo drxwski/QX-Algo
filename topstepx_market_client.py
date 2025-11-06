@@ -199,15 +199,32 @@ class TopstepXMarketClient:
         return True
 
     def calculate_position_size(self, entry, stop):
-        """Risk RISK_PCT of virtual balance using MES economics."""
+        """
+        Risk RISK_PCT of BASE balance (always $2000) using MES economics.
+        Position size based on fixed $2000 base, NOT virtual balance growth.
+        """
+        BASE_BALANCE = 2000.0  # TopstepX challenge starting balance
+        
         stop_distance = abs(entry - stop)                                # points
         ticks = stop_distance / TICK_SIZE
         risk_per_contract = ticks * TICK_VALUE                           # $ per contract at stop
-        risk_dollars = max(0, self.account_balance_virtual * RISK_PCT)
+        risk_dollars = BASE_BALANCE * RISK_PCT  # Always risk 12% of $2000 = $240
         contracts = max(1, int(risk_dollars // risk_per_contract)) if risk_per_contract > 0 else 1
+        
+        # Cap at 48 micro contracts (prevents excessive profit per trade for challenge compliance)
+        # Additional cap: Ensure max loss at stop is ≤ $240 (12% of $2000)
+        max_loss = stop_distance * contracts * POINT_VALUE
+        if max_loss > 240:
+            contracts = int(240 / (stop_distance * POINT_VALUE))
+            contracts = max(1, contracts)  # At least 1 contract
+        
+        contracts = min(contracts, 48)  # Hard cap at 48
+        
+        actual_risk = stop_distance * contracts * POINT_VALUE
+        
         print(
-            f"[Risk] Position size calc | balance=${self.account_balance_virtual:.2f} | {(RISK_PCT*100):.0f}%=${risk_dollars:.2f} | stop={stop_distance:.2f}pts "
-            f"({ticks:.1f} ticks) | risk/ct=${risk_per_contract:.2f} | size={contracts}"
+            f"[Risk] Position size | base=${BASE_BALANCE:.0f} | {(RISK_PCT*100):.0f}%=${risk_dollars:.2f} | "
+            f"stop={stop_distance:.2f}pts | risk/ct=${risk_per_contract:.2f} | contracts={contracts} | actual_risk=${actual_risk:.2f}"
         )
         return contracts
 
@@ -656,6 +673,20 @@ class TopstepXMarketClient:
             # Stop Loss: Always at 60% of IDR range (same for bullish and bearish)
             stop_loss = idr_low + (0.60 * idr_range)
             
+            # Entry time cutoffs - skip trade if we're past these times
+            entry_cutoff = {
+                'odr': time(6, 0),   # 6:00 AM
+                'rdr': time(14, 0),  # 2:00 PM  
+                'adr': time(23, 0)   # 11:00 PM
+            }
+            current_time = now_est.time()
+            cutoff_time = entry_cutoff[session]
+            
+            if current_time > cutoff_time:
+                print(f"[SKIP] {session.upper()} - Entry cutoff time {cutoff_time.strftime('%H:%M')} passed (current: {current_time.strftime('%H:%M')})")
+                self.session_trades[session] += 1  # Count it to prevent retry
+                return
+            
             # Use cached IDR std dev (already computed in get_or_compute_session_boundaries)
             # idr_std is available from cached_bounds
             
@@ -680,13 +711,13 @@ class TopstepXMarketClient:
                     self.session_trades[session] += 1  # Count it to prevent retry
                     return
                 
-                # Check if price has reached entry level
-                if current_price < entry_price:
-                    print(f"[WAIT] Bullish - waiting for price to reach {entry_price:.2f} (current: {current_price:.2f})")
+                # Check if price has reached entry level (retraced DOWN to entry)
+                if current_price > entry_price:
+                    print(f"[WAIT] Bullish - waiting for retrace down to {entry_price:.2f} (current: {current_price:.2f})")
                     return
                 
-                # If we get here, price >= entry_price, so we can enter
-                print(f"[ENTRY CONDITION MET] Bullish - price {current_price:.2f} >= entry {entry_price:.2f}")
+                # If we get here, price <= entry_price, so we can enter
+                print(f"[ENTRY CONDITION MET] Bullish - price {current_price:.2f} retraced to entry {entry_price:.2f}")
                     
             else:  # bearish
                 # Entry: 20% retrace from IDR low
@@ -709,13 +740,13 @@ class TopstepXMarketClient:
                     self.session_trades[session] += 1  # Count it to prevent retry
                     return
                 
-                # Check if price has reached entry level
-                if current_price > entry_price:
-                    print(f"[WAIT] Bearish - waiting for price to reach {entry_price:.2f} (current: {current_price:.2f})")
+                # Check if price has reached entry level (retraced UP to entry)
+                if current_price < entry_price:
+                    print(f"[WAIT] Bearish - waiting for retrace up to {entry_price:.2f} (current: {current_price:.2f})")
                     return
                 
-                # If we get here, price <= entry_price, so we can enter
-                print(f"[ENTRY CONDITION MET] Bearish - price {current_price:.2f} <= entry {entry_price:.2f}")
+                # If we get here, price >= entry_price, so we can enter
+                print(f"[ENTRY CONDITION MET] Bearish - price {current_price:.2f} retraced to entry {entry_price:.2f}")
                     
             contracts = self.calculate_position_size(entry_price, stop_loss)
             print(f"[DEBUG] Calculated position size: {contracts} contracts")

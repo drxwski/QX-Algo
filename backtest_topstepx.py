@@ -20,7 +20,7 @@ POINT_VALUE = 5.0
 RISK_PCT = 0.12
 VIRTUAL_BALANCE = 2000.0
 
-def fetch_historical_data(contract_id, days_back=7):
+def fetch_historical_data(contract_id, days_back=14):
     """Fetch historical 5-minute bars from TopstepX"""
     print(f"Fetching {days_back} days of 5-minute bars...")
     
@@ -35,7 +35,7 @@ def fetch_historical_data(contract_id, days_back=7):
         end_time=end_time,
         unit=BAR_UNIT_MINUTE,
         unit_number=5,
-        limit=2000,
+        limit=5000,  # 2 weeks ~= 4000 bars
         live=False,
         include_partial_bar=False,
         token=token
@@ -58,19 +58,36 @@ def fetch_historical_data(contract_id, days_back=7):
     return df
 
 def calculate_position_size(entry, stop, balance):
-    """Calculate position size using 12% risk"""
+    """
+    Calculate position size using 12% risk of BASE balance ($2000).
+    For TopstepX challenge: Always risk $240 max, cap contracts at 48.
+    """
+    BASE_BALANCE = 2000.0  # TopstepX starting balance
+    
     stop_distance = abs(entry - stop)
     ticks = stop_distance / TICK_SIZE
     risk_per_contract = ticks * TICK_VALUE
-    risk_dollars = balance * RISK_PCT
+    risk_dollars = BASE_BALANCE * RISK_PCT  # Always $240
     contracts = max(1, int(risk_dollars // risk_per_contract)) if risk_per_contract > 0 else 1
+    
+    # Ensure max loss at stop is ≤ $240
+    max_loss = stop_distance * contracts * POINT_VALUE
+    if max_loss > 240:
+        contracts = int(240 / (stop_distance * POINT_VALUE))
+        contracts = max(1, contracts)
+    
+    # Cap at 48 contracts (prevents >$1200 profit per trade for challenge compliance)
+    contracts = min(contracts, 48)
     return contracts
 
 def simulate_trade(entry, stop, tp, side, contracts, bars_df, entry_time):
     """
     Simulate a trade and return P&L
     side: 'long' or 'short'
+    Max profit capped at $1300 for challenge compliance
     """
+    MAX_PROFIT_PER_TRADE = 1300.0  # TopstepX challenge limit
+    
     # Get bars after entry
     future_bars = bars_df[bars_df.index > entry_time].head(100)  # Look ahead max 100 bars (~8 hours)
     
@@ -82,6 +99,11 @@ def simulate_trade(entry, stop, tp, side, contracts, bars_df, entry_time):
         low = row['low']
         
         if side == 'long':
+            # Check profit cap first (close if profit would exceed $1300)
+            current_profit = (high - entry) * contracts * POINT_VALUE
+            if current_profit >= MAX_PROFIT_PER_TRADE:
+                return MAX_PROFIT_PER_TRADE, f"Profit cap at ${MAX_PROFIT_PER_TRADE:.0f}", idx
+            
             # Check stop
             if low <= stop:
                 pnl = (stop - entry) * contracts * POINT_VALUE
@@ -90,10 +112,18 @@ def simulate_trade(entry, stop, tp, side, contracts, bars_df, entry_time):
             if high >= tp:
                 # 75% at target
                 pnl_75 = (tp - entry) * int(contracts * 0.75) * POINT_VALUE
+                # Cap if exceeds max
+                if pnl_75 > MAX_PROFIT_PER_TRADE:
+                    return MAX_PROFIT_PER_TRADE, f"Profit cap at ${MAX_PROFIT_PER_TRADE:.0f}", idx
                 # Assume 25% trails and gets stopped at breakeven
                 pnl_25 = 0
                 return pnl_75 + pnl_25, f"TP hit at {tp:.2f} (75%)", idx
         else:  # short
+            # Check profit cap first
+            current_profit = (entry - low) * contracts * POINT_VALUE
+            if current_profit >= MAX_PROFIT_PER_TRADE:
+                return MAX_PROFIT_PER_TRADE, f"Profit cap at ${MAX_PROFIT_PER_TRADE:.0f}", idx
+            
             # Check stop
             if high >= stop:
                 pnl = (entry - stop) * contracts * POINT_VALUE
@@ -102,6 +132,9 @@ def simulate_trade(entry, stop, tp, side, contracts, bars_df, entry_time):
             if low <= tp:
                 # 75% at target
                 pnl_75 = (entry - tp) * int(contracts * 0.75) * POINT_VALUE
+                # Cap if exceeds max
+                if pnl_75 > MAX_PROFIT_PER_TRADE:
+                    return MAX_PROFIT_PER_TRADE, f"Profit cap at ${MAX_PROFIT_PER_TRADE:.0f}", idx
                 # Assume 25% trails and gets stopped at breakeven
                 pnl_25 = 0
                 return pnl_75 + pnl_25, f"TP hit at {tp:.2f} (75%)", idx
@@ -112,6 +145,11 @@ def simulate_trade(entry, stop, tp, side, contracts, bars_df, entry_time):
         pnl = (last_price - entry) * contracts * POINT_VALUE
     else:
         pnl = (entry - last_price) * contracts * POINT_VALUE
+    
+    # Cap profit even on time limit
+    if pnl > MAX_PROFIT_PER_TRADE:
+        pnl = MAX_PROFIT_PER_TRADE
+        return pnl, f"Profit cap at ${MAX_PROFIT_PER_TRADE:.0f}", future_bars.index[-1]
     
     return pnl, f"Time limit at {last_price:.2f}", future_bars.index[-1]
 
@@ -182,22 +220,36 @@ def run_backtest(df):
             # Get bars after confirmation to check for entry
             post_conf_bars = day_bars[day_bars.index > conf_time]
             
+            # Entry time cutoffs (skip trade if entry not hit by these times)
+            entry_cutoff = {
+                'odr': time(6, 0),   # 6:00 AM
+                'rdr': time(14, 0),  # 2:00 PM
+                'adr': time(23, 0)   # 11:00 PM
+            }
+            cutoff_time = entry_cutoff[session]
+            post_conf_bars = post_conf_bars[post_conf_bars.index.time <= cutoff_time]
+            
+            if post_conf_bars.empty:
+                continue  # No bars available before cutoff, skip this trade
+            
             if bias == 'bullish':
                 entry_price = idr_high - (0.20 * idr_range)
                 idr_std = day_bars['close'].std()
                 take_profit = idr_high + idr_std
                 side = 'long'
                 
-                # Find when price reaches entry
-                entry_bars = post_conf_bars[post_conf_bars['close'] >= entry_price]
+                # Find when price reaches entry (retraces DOWN to entry level)
+                entry_bars = post_conf_bars[post_conf_bars['close'] <= entry_price]
                 if entry_bars.empty:
                     result = "No entry - price didn't reach entry level"
                     pnl = 0
                     exit_reason = "N/A"
+                    actual_entry_time = None
+                    exit_time = None
                 else:
-                    entry_time = entry_bars.index[0]
+                    actual_entry_time = entry_bars.index[0]
                     contracts = calculate_position_size(entry_price, stop_loss, balance)
-                    pnl, exit_reason, exit_time = simulate_trade(entry_price, stop_loss, take_profit, side, contracts, df, entry_time)
+                    pnl, exit_reason, exit_time = simulate_trade(entry_price, stop_loss, take_profit, side, contracts, df, actual_entry_time)
                     result = f"${pnl:.2f}"
                     balance += pnl
             else:  # bearish
@@ -206,35 +258,57 @@ def run_backtest(df):
                 take_profit = idr_low - idr_std
                 side = 'short'
                 
-                # Find when price reaches entry
-                entry_bars = post_conf_bars[post_conf_bars['close'] <= entry_price]
+                # Find when price reaches entry (retraces UP to entry level)
+                entry_bars = post_conf_bars[post_conf_bars['close'] >= entry_price]
                 if entry_bars.empty:
                     result = "No entry - price didn't reach entry level"
                     pnl = 0
                     exit_reason = "N/A"
+                    actual_entry_time = None
+                    exit_time = None
                 else:
-                    entry_time = entry_bars.index[0]
+                    actual_entry_time = entry_bars.index[0]
                     contracts = calculate_position_size(entry_price, stop_loss, balance)
-                    pnl, exit_reason, exit_time = simulate_trade(entry_price, stop_loss, take_profit, side, contracts, df, entry_time)
+                    pnl, exit_reason, exit_time = simulate_trade(entry_price, stop_loss, take_profit, side, contracts, df, actual_entry_time)
                     result = f"${pnl:.2f}"
                     balance += pnl
+            
+            # Calculate risk metrics
+            if 'No entry' not in result:
+                stop_distance = abs(entry_price - stop_loss)
+                risk_dollars = VIRTUAL_BALANCE * RISK_PCT
+                risk_per_contract = stop_distance * POINT_VALUE
+                actual_contracts = calculate_position_size(entry_price, stop_loss, balance if 'No entry' not in result else VIRTUAL_BALANCE)
+                actual_risk = stop_distance * actual_contracts * POINT_VALUE
+            else:
+                stop_distance = 0
+                risk_dollars = 0
+                risk_per_contract = 0
+                actual_contracts = 0
+                actual_risk = 0
             
             # Record result
             results.append({
                 'Date': date,
                 'Session': session.upper(),
                 'Confirmation': conf_time.strftime('%H:%M:%S'),
+                'Entry Time': actual_entry_time.strftime('%H:%M:%S') if actual_entry_time else 'N/A',
+                'Exit Time': exit_time.strftime('%H:%M:%S') if exit_time else 'N/A',
                 'Bias': bias.upper(),
-                'DR High': f"{dr_high:.2f}",
-                'DR Low': f"{dr_low:.2f}",
-                'IDR High': f"{idr_high:.2f}",
-                'IDR Low': f"{idr_low:.2f}",
-                'Entry': f"{entry_price:.2f}",
-                'Stop': f"{stop_loss:.2f}",
-                'TP': f"{take_profit:.2f}",
-                'Result': result,
+                'DR High': dr_high,
+                'DR Low': dr_low,
+                'IDR High': idr_high,
+                'IDR Low': idr_low,
+                'IDR Range': idr_range,
+                'Entry': entry_price,
+                'Stop': stop_loss,
+                'TP': take_profit,
+                'Stop Distance': stop_distance,
+                'Contracts': actual_contracts,
+                'Risk $': actual_risk,
+                'PnL': pnl,
                 'Exit': exit_reason,
-                'Balance': f"${balance:.2f}"
+                'Balance': balance
             })
     
     return pd.DataFrame(results)
@@ -266,7 +340,7 @@ def main():
     print(f"✓ Using contract: {mes_contract['name']} ({contract_id})")
     
     # Fetch data
-    df = fetch_historical_data(contract_id, days_back=5)
+    df = fetch_historical_data(contract_id, days_back=14)
     
     if df.empty:
         print("No data to backtest!")
@@ -284,18 +358,42 @@ def main():
         print("\nNo trades found in the data range.")
         return
     
-    # Show each trade
+    # Show each trade with full details
     for idx, row in results_df.iterrows():
-        print(f"\n{'-'*80}")
-        print(f"Trade #{idx+1}: {row['Date']} - {row['Session']} Session")
-        print(f"{'-'*80}")
-        print(f"  Confirmation: {row['Confirmation']} ({row['Bias']})")
-        print(f"  DR Levels:  {row['DR High']} / {row['DR Low']}")
-        print(f"  IDR Levels: {row['IDR High']} / {row['IDR Low']}")
-        print(f"  Entry: {row['Entry']} | Stop: {row['Stop']} | TP: {row['TP']}")
-        print(f"  Result: {row['Result']}")
+        print(f"\n{'='*80}")
+        print(f"TRADE #{idx+1}: {row['Date']} - {row['Session']} SESSION - {row['Bias']}")
+        print(f"{'='*80}")
+        
+        print(f"\n📊 RANGE LEVELS:")
+        print(f"  DR High:  {row['DR High']:.2f}")
+        print(f"  DR Low:   {row['DR Low']:.2f}")
+        print(f"  IDR High: {row['IDR High']:.2f}")
+        print(f"  IDR Low:  {row['IDR Low']:.2f}")
+        print(f"  IDR Range: {row['IDR Range']:.2f} points")
+        
+        print(f"\n🎯 ENTRY SETUP:")
+        print(f"  Confirmation Time: {row['Confirmation']} EST")
+        print(f"  Entry Time: {row['Entry Time']} EST")
+        print(f"  Exit Time: {row['Exit Time']} EST")
+        print(f"  Direction: {row['Bias']}")
+        print(f"  Entry Price: {row['Entry']:.2f}")
+        print(f"  Stop Loss: {row['Stop']:.2f}")
+        print(f"  Take Profit: {row['TP']:.2f}")
+        print(f"  Stop Distance: {row['Stop Distance']:.2f} points")
+        
+        print(f"\n💰 RISK MANAGEMENT:")
+        print(f"  Account Balance: ${row['Balance'] - row['PnL']:.2f}")
+        print(f"  Risk % Allocated: {RISK_PCT*100:.0f}%")
+        print(f"  Risk per Contract: ${row['Stop Distance'] * POINT_VALUE:.2f}")
+        print(f"  Position Size: {row['Contracts']} micro contracts")
+        print(f"  Total $ Risk: ${row['Risk $']:.2f}")
+        
+        print(f"\n📈 TRADE RESULT:")
         print(f"  Exit: {row['Exit']}")
-        print(f"  Running Balance: {row['Balance']}")
+        pnl_color = "+" if row['PnL'] >= 0 else ""
+        print(f"  P&L: {pnl_color}${row['PnL']:.2f}")
+        print(f"  New Balance: ${row['Balance']:.2f}")
+        print(f"  Return: {(row['PnL']/(row['Balance'] - row['PnL']))*100:.1f}%")
     
     # Summary
     print(f"\n{'='*80}")
@@ -304,9 +402,9 @@ def main():
     print(f"Total Trades: {len(results_df)}")
     
     # Calculate wins/losses
-    wins = len([r for r in results_df['Result'] if r.startswith('$') and float(r.replace('$', '')) > 0])
-    losses = len([r for r in results_df['Result'] if r.startswith('$') and float(r.replace('$', '')) < 0])
-    no_entry = len([r for r in results_df['Result'] if 'No entry' in r])
+    wins = len(results_df[results_df['PnL'] > 0])
+    losses = len(results_df[results_df['PnL'] < 0])
+    no_entry = len(results_df[results_df['PnL'] == 0])
     
     print(f"Wins: {wins}")
     print(f"Losses: {losses}")
@@ -317,11 +415,18 @@ def main():
         print(f"Win Rate: {win_rate:.1f}%")
     
     # Final P&L
-    final_balance = float(results_df.iloc[-1]['Balance'].replace('$', '')) if not results_df.empty else VIRTUAL_BALANCE
+    final_balance = float(results_df.iloc[-1]['Balance']) if not results_df.empty else VIRTUAL_BALANCE
     total_pnl = final_balance - VIRTUAL_BALANCE
     print(f"\nStarting Balance: ${VIRTUAL_BALANCE:.2f}")
     print(f"Ending Balance: ${final_balance:.2f}")
     print(f"Total P&L: ${total_pnl:.2f} ({(total_pnl/VIRTUAL_BALANCE)*100:.1f}%)")
+    
+    # Best and worst trades
+    if not results_df.empty:
+        best_trade = results_df.loc[results_df['PnL'].idxmax()]
+        worst_trade = results_df.loc[results_df['PnL'].idxmin()]
+        print(f"\nBest Trade: +${best_trade['PnL']:.2f} ({best_trade['Date']} {best_trade['Session']})")
+        print(f"Worst Trade: -${abs(worst_trade['PnL']):.2f} ({worst_trade['Date']} {worst_trade['Session']})")
     
     # Save to CSV
     output_file = 'backtest_results.csv'
