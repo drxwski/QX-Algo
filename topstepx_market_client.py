@@ -245,15 +245,47 @@ class TopstepXMarketClient:
 
         cache_key = (session, session_date.isoformat())
         
-        # Check cache first
+        # Check cache first (but validate that range window is complete)
         if cache_key in self.session_cache:
             cached = self.session_cache[cache_key]
-            dr_high = cached['dr_high']
-            dr_low = cached['dr_low']
-            idr_high = cached['idr_high']
-            idr_low = cached['idr_low']
-            print(f"[DR/IDR] {session.upper()} | DR: {dr_high:.2f}/{dr_low:.2f} | IDR: {idr_high:.2f}/{idr_low:.2f}")
-            return cached
+
+            # Determine the latest bar we currently have inside the DR range window
+            range_windows = {
+                'odr': (self.model.odr_start, self.model.odr_end),
+                'rdr': (self.model.rdr_start, self.model.rdr_end),
+                'adr': (self.model.adr_start, self.model.adr_end)
+            }
+            range_start, range_end = range_windows[session]
+            tz_est = pytz.timezone('US/Eastern')
+
+            def in_range(idx):
+                idx_local = idx.tz_convert(tz_est) if idx.tzinfo is not None else tz_est.localize(idx)
+                idx_date = idx_local.date()
+                idx_time = idx_local.time()
+                if idx_date != session_date:
+                    return False
+                if range_start <= range_end:
+                    return range_start <= idx_time <= range_end
+                # Overnight window (not used currently, but keep logic robust)
+                    
+                return idx_time >= range_start or idx_time <= range_end
+
+            range_indices = [idx for idx in bars_df.index if in_range(idx)]
+            latest_range_bar = max(range_indices) if range_indices else None
+            cached_end = cached.get('dr_end')
+
+            # If new bars have extended the DR range, refresh the cache
+            if latest_range_bar is not None and (
+                pd.isna(cached_end) or latest_range_bar > cached_end
+            ):
+                print(f"[DR/IDR] {session.upper()} range extended to {latest_range_bar.strftime('%H:%M:%S')} - refreshing boundaries")
+            else:
+                dr_high = cached['dr_high']
+                dr_low = cached['dr_low']
+                idr_high = cached['idr_high']
+                idr_low = cached['idr_low']
+                print(f"[DR/IDR] {session.upper()} | DR: {dr_high:.2f}/{dr_low:.2f} | IDR: {idr_high:.2f}/{idr_low:.2f}")
+                return cached
         
         # Not cached - compute fresh for this session/date only
         target_timestamp = pd.Timestamp.combine(session_date, time(12, 0)).tz_localize('US/Eastern')
